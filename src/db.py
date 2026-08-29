@@ -16,5 +16,6 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def crear_tablas(app: FastAPI):
     SQLModel.metadata.create_all(engine)
+    from minimos import sembrar_datos_iniciales
+    sembrar_datos_iniciales()
     yield
-
