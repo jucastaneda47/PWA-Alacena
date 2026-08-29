@@ -45,5 +45,62 @@ class verificarpin(SQLModel):
     pin: str
 
 
+class categoria(SQLModel):
+    nombre: str = Field(unique=True)
+    stock_minimo: float = Field(default=0)
+
+
+class categoriacreate(categoria):
+    ...
+
+
+class categoriaupdate(SQLModel):
+    nombre: str | None = None
+    stock_minimo: float | None = None
+
+
+class categoriadb(categoria, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+
+class unidadmedida(SQLModel):
+    nombre: str = Field(unique=True)
+    abreviatura: str = Field(unique=True)
+
+
+class unidadmedidacreate(unidadmedida):
+    ...
+
+
+class unidadmedidaupdate(SQLModel):
+    nombre: str | None = None
+    abreviatura: str | None = None
+
+
+class unidadmedidadb(unidadmedida, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+
+
+class producto(SQLModel):
+    nombre: str
+    categoria_id: int = Field(foreign_key="categoriadb.id")
+    unidad_de_medida_id: int = Field(foreign_key="unidadmedidadb.id")
+    stock_minimo: float | None = Field(default=None)
+    """Si es None, el producto hereda el stock_minimo de su categoría."""
+
+
+class productocreate(producto):
+    ...
+
+
+class productoupdate(SQLModel):
+    nombre: str | None = None
+    categoria_id: int | None = None
+    unidad_de_medida_id: int | None = None
+    stock_minimo: float | None = None
+
+
+class productodb(producto, table=True):
+    id: int | None = Field(default=None, primary_key=True)
 
 
