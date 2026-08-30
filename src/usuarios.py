@@ -5,11 +5,12 @@ from passlib.hash import argon2
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlmodel import select
 from datetime import datetime, timedelta
-from jose import jwt, JWTError
+from jose import jwt
 from correo import generar_pin, enviar_pin_verificacion, PIN_VALIDEZ_MINUTOS
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from minimos import sembrar_datos_para_usuario
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -29,6 +30,8 @@ async def crear(conexion: sesiondb, usuario: usuariocreate):
     )
 
     usadb = usuariodb.model_validate(nuevo_usuario)
+
+    # --- Generamos el PIN de verificación ---
     pin = generar_pin()
     usadb.pin_verificacion = pin
     usadb.pin_expiracion = datetime.utcnow() + timedelta(minutes=PIN_VALIDEZ_MINUTOS)
@@ -38,7 +41,12 @@ async def crear(conexion: sesiondb, usuario: usuariocreate):
     conexion.commit()
     conexion.refresh(usadb)
 
+    # --- Carga la copia personal de categorías y unidades de medida ---
+    sembrar_datos_para_usuario(usadb.id)
+
+    # --- Enviamos el correo con el PIN ---
     await enviar_pin_verificacion(usadb.correo, pin)
+
     return usadb
 
 @router.post("/login", tags=["login"])

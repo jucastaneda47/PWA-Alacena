@@ -1,17 +1,23 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import productocreate, productodb, productoupdate, categoriadb, unidadmedidadb
+from modelos import (
+    productocreate, productodb, productoupdate,
+    categoriadb, unidadmedidadb, usuariodb,
+)
+from usuarios import confirmacion
 
 router = APIRouter()
 
 
-def _validar_referencias(conexion, categoria_id: int, unidad_de_medida_id: int):
-    if conexion.get(categoriadb, categoria_id) is None:
+def _validar_referencias(conexion, usuario_id: int, categoria_id: int, unidad_de_medida_id: int):
+    categoria = conexion.get(categoriadb, categoria_id)
+    if categoria is None or categoria.usuario_id != usuario_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="La categoría indicada no existe"
         )
-    if conexion.get(unidadmedidadb, unidad_de_medida_id) is None:
+    unidad = conexion.get(unidadmedidadb, unidad_de_medida_id)
+    if unidad is None or unidad.usuario_id != usuario_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La unidad de medida indicada no existe",
@@ -19,11 +25,12 @@ def _validar_referencias(conexion, categoria_id: int, unidad_de_medida_id: int):
 
 
 @router.post("/productos", response_model=productodb, tags=["productos"])
-async def crear_producto(conexion: sesiondb, datos: productocreate):
-    
-    _validar_referencias(conexion, datos.categoria_id, datos.unidad_de_medida_id)
+async def crear_producto(
+    conexion: sesiondb, datos: productocreate, usuario: usuariodb = Depends(confirmacion)
+):
+    _validar_referencias(conexion, usuario.id, datos.categoria_id, datos.unidad_de_medida_id)
 
-    nuevo = productodb.model_validate(datos)
+    nuevo = productodb(**datos.model_dump(), usuario_id=usuario.id)
     conexion.add(nuevo)
     conexion.commit()
     conexion.refresh(nuevo)
@@ -31,14 +38,18 @@ async def crear_producto(conexion: sesiondb, datos: productocreate):
 
 
 @router.get("/productos", response_model=list[productodb], tags=["productos"])
-async def listar_productos(conexion: sesiondb):
-    return conexion.exec(select(productodb)).all()
+async def listar_productos(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
+    return conexion.exec(
+        select(productodb).where(productodb.usuario_id == usuario.id)
+    ).all()
 
 
 @router.get("/productos/{producto_id}", response_model=productodb, tags=["productos"])
-async def obtener_producto(conexion: sesiondb, producto_id: int):
+async def obtener_producto(
+    conexion: sesiondb, producto_id: int, usuario: usuariodb = Depends(confirmacion)
+):
     producto = conexion.get(productodb, producto_id)
-    if producto is None:
+    if producto is None or producto.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado"
         )
@@ -46,9 +57,14 @@ async def obtener_producto(conexion: sesiondb, producto_id: int):
 
 
 @router.put("/productos/{producto_id}", response_model=productodb, tags=["productos"])
-async def actualizar_producto(conexion: sesiondb, producto_id: int, datos: productoupdate):
+async def actualizar_producto(
+    conexion: sesiondb,
+    producto_id: int,
+    datos: productoupdate,
+    usuario: usuariodb = Depends(confirmacion),
+):
     producto = conexion.get(productodb, producto_id)
-    if producto is None:
+    if producto is None or producto.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado"
         )
@@ -58,6 +74,7 @@ async def actualizar_producto(conexion: sesiondb, producto_id: int, datos: produ
     if "categoria_id" in cambios or "unidad_de_medida_id" in cambios:
         _validar_referencias(
             conexion,
+            usuario.id,
             cambios.get("categoria_id", producto.categoria_id),
             cambios.get("unidad_de_medida_id", producto.unidad_de_medida_id),
         )
@@ -72,9 +89,11 @@ async def actualizar_producto(conexion: sesiondb, producto_id: int, datos: produ
 
 
 @router.delete("/productos/{producto_id}", tags=["productos"])
-async def eliminar_producto(conexion: sesiondb, producto_id: int):
+async def eliminar_producto(
+    conexion: sesiondb, producto_id: int, usuario: usuariodb = Depends(confirmacion)
+):
     producto = conexion.get(productodb, producto_id)
-    if producto is None:
+    if producto is None or producto.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado"
         )
@@ -84,10 +103,11 @@ async def eliminar_producto(conexion: sesiondb, producto_id: int):
 
 
 @router.get("/productos/{producto_id}/stock-minimo-efectivo", tags=["productos"])
-async def obtener_stock_minimo_efectivo(conexion: sesiondb, producto_id: int):
-   
+async def obtener_stock_minimo_efectivo(
+    conexion: sesiondb, producto_id: int, usuario: usuariodb = Depends(confirmacion)
+):
     producto = conexion.get(productodb, producto_id)
-    if producto is None:
+    if producto is None or producto.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado"
         )
