@@ -1,24 +1,34 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import categoriacreate, categoriadb, categoriaupdate
+from modelos import categoriacreate, categoriadb, categoriaupdate, usuariodb
+from usuarios import confirmacion
 
 router = APIRouter()
 
 
 @router.post("/categorias", response_model=categoriadb, tags=["categorias"])
-async def crear_categoria(conexion: sesiondb, datos: categoriacreate):
-    """Crea una nueva categoría de alimentos con su stock mínimo por defecto."""
+async def crear_categoria(
+    conexion: sesiondb,
+    datos: categoriacreate,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """Crea una categoría propia del usuario autenticado."""
     existente = conexion.exec(
-        select(categoriadb).where(categoriadb.nombre == datos.nombre)
+        select(categoriadb).where(
+            categoriadb.usuario_id == usuario.id,
+            categoriadb.nombre == datos.nombre,
+        )
     ).first()
     if existente:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ya existe una categoría con ese nombre",
+            detail="Ya tienes una categoría con ese nombre",
         )
 
-    nueva = categoriadb.model_validate(datos)
+    nueva = categoriadb(
+        nombre=datos.nombre, stock_minimo=datos.stock_minimo, usuario_id=usuario.id
+    )
     conexion.add(nueva)
     conexion.commit()
     conexion.refresh(nueva)
@@ -26,15 +36,19 @@ async def crear_categoria(conexion: sesiondb, datos: categoriacreate):
 
 
 @router.get("/categorias", response_model=list[categoriadb], tags=["categorias"])
-async def listar_categorias(conexion: sesiondb):
-    """Lista todas las categorías disponibles, para poblar el selector del frontend."""
-    return conexion.exec(select(categoriadb)).all()
+async def listar_categorias(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
+    """Lista únicamente las categorías del usuario autenticado."""
+    return conexion.exec(
+        select(categoriadb).where(categoriadb.usuario_id == usuario.id)
+    ).all()
 
 
 @router.get("/categorias/{categoria_id}", response_model=categoriadb, tags=["categorias"])
-async def obtener_categoria(conexion: sesiondb, categoria_id: int):
+async def obtener_categoria(
+    conexion: sesiondb, categoria_id: int, usuario: usuariodb = Depends(confirmacion)
+):
     categoria = conexion.get(categoriadb, categoria_id)
-    if categoria is None:
+    if categoria is None or categoria.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
         )
@@ -42,10 +56,14 @@ async def obtener_categoria(conexion: sesiondb, categoria_id: int):
 
 
 @router.put("/categorias/{categoria_id}", response_model=categoriadb, tags=["categorias"])
-async def actualizar_categoria(conexion: sesiondb, categoria_id: int, datos: categoriaupdate):
-    """Permite editar el nombre y/o el stock mínimo de la categoría."""
+async def actualizar_categoria(
+    conexion: sesiondb,
+    categoria_id: int,
+    datos: categoriaupdate,
+    usuario: usuariodb = Depends(confirmacion),
+):
     categoria = conexion.get(categoriadb, categoria_id)
-    if categoria is None:
+    if categoria is None or categoria.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
         )
@@ -61,9 +79,11 @@ async def actualizar_categoria(conexion: sesiondb, categoria_id: int, datos: cat
 
 
 @router.delete("/categorias/{categoria_id}", tags=["categorias"])
-async def eliminar_categoria(conexion: sesiondb, categoria_id: int):
+async def eliminar_categoria(
+    conexion: sesiondb, categoria_id: int, usuario: usuariodb = Depends(confirmacion)
+):
     categoria = conexion.get(categoriadb, categoria_id)
-    if categoria is None:
+    if categoria is None or categoria.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
         )

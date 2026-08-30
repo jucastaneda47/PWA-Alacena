@@ -1,4 +1,4 @@
-from sqlmodel import Session, select
+from sqlmodel import Session
 from db import engine
 from modelos import categoriadb, unidadmedidadb
 
@@ -25,25 +25,20 @@ UNIDADES_PREDETERMINADAS = [
 ]
 
 
-def sembrar_datos_iniciales():
+def sembrar_datos_para_usuario(usuario_id: int):
     """
-    Inserta las categorías y unidades de medida predeterminadas si todavía
-    no existen. Es seguro llamarla en cada arranque del servidor: no
-    duplica registros ya creados.
+    Crea la copia PERSONAL de categorías y unidades de medida
+    predeterminadas para un usuario recién registrado. Cada usuario
+    obtiene sus propias filas en la base de datos, totalmente
+    independientes de las de los demás usuarios.
     """
     with Session(engine) as sesion:
         for nombre in CATEGORIAS_PREDETERMINADAS:
-            existe = sesion.exec(
-                select(categoriadb).where(categoriadb.nombre == nombre)
-            ).first()
-            if not existe:
-                sesion.add(categoriadb(nombre=nombre, stock_minimo=0))
+            sesion.add(categoriadb(nombre=nombre, stock_minimo=0, usuario_id=usuario_id))
 
         for nombre, abreviatura in UNIDADES_PREDETERMINADAS:
-            existe = sesion.exec(
-                select(unidadmedidadb).where(unidadmedidadb.nombre == nombre)
-            ).first()
-            if not existe:
-                sesion.add(unidadmedidadb(nombre=nombre, abreviatura=abreviatura))
+            sesion.add(
+                unidadmedidadb(nombre=nombre, abreviatura=abreviatura, usuario_id=usuario_id)
+            )
 
         sesion.commit()

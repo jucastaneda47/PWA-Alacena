@@ -44,9 +44,8 @@ class verificarpin(SQLModel):
     correo: EmailStr
     pin: str
 
-
 class categoria(SQLModel):
-    nombre: str = Field(unique=True)
+    nombre: str
     stock_minimo: float = Field(default=0)
 
 
@@ -61,11 +60,13 @@ class categoriaupdate(SQLModel):
 
 class categoriadb(categoria, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
+    """A qué usuario le pertenece esta categoría. Cada usuario tiene las suyas."""
 
 
 class unidadmedida(SQLModel):
-    nombre: str = Field(unique=True)
-    abreviatura: str = Field(unique=True)
+    nombre: str
+    abreviatura: str
 
 
 class unidadmedidacreate(unidadmedida):
@@ -79,6 +80,7 @@ class unidadmedidaupdate(SQLModel):
 
 class unidadmedidadb(unidadmedida, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
 
 
 class producto(SQLModel):
@@ -102,5 +104,4 @@ class productoupdate(SQLModel):
 
 class productodb(producto, table=True):
     id: int | None = Field(default=None, primary_key=True)
-
-
+    usuario_id: int = Field(foreign_key="usuariodb.id")
