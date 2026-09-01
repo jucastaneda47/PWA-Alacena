@@ -142,3 +142,18 @@ class lotedb(lotebase, table=True):
     usuario_id: int = Field(foreign_key="usuariodb.id")
     cantidad_actual: float
     estado: str = Field(default="vigente")
+
+class transaccion(SQLModel):
+    lote_id: int = Field(foreign_key="lotedb.id")
+    tipo: str = Field(default="consumo")
+    cantidad: float
+    fecha: datetime = Field(default_factory=datetime.utcnow)
+
+class transaccioncreate(SQLModel):
+    lote_id: int
+    cantidad: float
+    tipo: str = "consumo"
+
+class transacciondb(transaccion, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
