@@ -1,7 +1,7 @@
 from sqlmodel import SQLModel,Field
 from pydantic import EmailStr, field_validator
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, date
 
 
 class usuario(SQLModel):
@@ -105,3 +105,40 @@ class productoupdate(SQLModel):
 class productodb(producto, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
+
+
+
+class compra(SQLModel):
+    fecha_compra: date = Field(default_factory=date.today)
+
+
+class compracreate(compra):
+    ...
+
+
+class compradb(compra, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
+
+
+class lotebase(SQLModel):
+    producto_id: int = Field(foreign_key="productodb.id")
+    compra_id: int = Field(foreign_key="compradb.id")
+    fecha_vencimiento: date
+    cantidad_inicial: float
+
+
+class lotecreate(lotebase):
+    ...
+
+
+class loteupdate(SQLModel):
+    cantidad_actual: float | None = None
+    fecha_vencimiento: date | None = None
+
+
+class lotedb(lotebase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
+    cantidad_actual: float
+    estado: str = Field(default="vigente")
