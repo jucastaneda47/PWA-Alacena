@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from db import crear_tablas
 import modelos
-import usuarios,correo, categoria,productos,unidades_medidas,compras,lotes,inventario
+import usuarios,correo, categoria,productos,unidades_medidas,compras,lotes,inventario,consumo
 from fastapi.middleware.cors import CORSMiddleware
 
 app=FastAPI(lifespan=crear_tablas)
@@ -12,6 +12,8 @@ app.include_router(unidades_medidas.router)
 app.include_router(compras.router)
 app.include_router(lotes.router)
 app.include_router(inventario.router)
+app.include_router(consumo.router)
+
 
 @app.get("/")
 async def sapohp():

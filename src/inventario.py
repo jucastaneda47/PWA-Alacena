@@ -3,7 +3,7 @@ from sqlmodel import select
 from db import sesiondb
 from modelos import lotedb, productodb, categoriadb, unidadmedidadb, usuariodb
 from usuarios import confirmacion
-from clasificacion import calcular_estado
+from clasificacion import calcular_estado, calcular_dias_restantes
 
 router = APIRouter()
 
@@ -15,12 +15,14 @@ async def consultar_inventario(
     estado: str | None = None,
     usuario: usuariodb = Depends(confirmacion),
 ):
+
     consulta = (
         select(lotedb, productodb, categoriadb, unidadmedidadb)
         .join(productodb, lotedb.producto_id == productodb.id)
         .join(categoriadb, productodb.categoria_id == categoriadb.id)
         .join(unidadmedidadb, productodb.unidad_de_medida_id == unidadmedidadb.id)
-        .where(lotedb.usuario_id == usuario.id)
+        .where(lotedb.usuario_id == usuario.id, lotedb.cantidad_actual > 0)
+        .order_by(lotedb.fecha_vencimiento.asc())
     )
 
     if categoria_id is not None:
@@ -49,6 +51,7 @@ async def consultar_inventario(
                 "cantidad_inicial": lote.cantidad_inicial,
                 "cantidad_actual": lote.cantidad_actual,
                 "fecha_vencimiento": lote.fecha_vencimiento,
+                "dias_restantes": calcular_dias_restantes(lote.fecha_vencimiento),
                 "estado": lote.estado,
             }
         )

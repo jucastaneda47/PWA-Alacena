@@ -2,6 +2,10 @@ from datetime import date
 
 UMBRAL_PROXIMO_DIAS = 5
 
+def calcular_dias_restantes(fecha_vencimiento: date) -> int:
+    """Días que faltan para el vencimiento (negativo si ya venció)."""
+    return (fecha_vencimiento - date.today()).days
+
 
 def calcular_estado(fecha_vencimiento: date) -> str:
     """
@@ -10,7 +14,7 @@ def calcular_estado(fecha_vencimiento: date) -> str:
     - proximo_a_vencer: quedan 5 días o menos
     - vigente: quedan más de 5 días
     """
-    dias_restantes = (fecha_vencimiento - date.today()).days
+    dias_restantes = calcular_dias_restantes(fecha_vencimiento)
 
     if dias_restantes <= 0:
         return "vencido"
