@@ -2,6 +2,7 @@ from sqlmodel import SQLModel,Field
 from pydantic import EmailStr, field_validator
 import re
 from datetime import datetime, date
+from sqlalchemy import CheckConstraint
 
 
 class usuario(SQLModel):
@@ -142,3 +143,37 @@ class lotedb(lotebase, table=True):
     usuario_id: int = Field(foreign_key="usuariodb.id")
     cantidad_actual: float
     estado: str = Field(default="vigente")
+
+class transaccion(SQLModel):
+    lote_id: int = Field(foreign_key="lotedb.id")
+    tipo: str = Field(default="consumo")
+    cantidad: float
+    fecha: datetime = Field(default_factory=datetime.utcnow)
+
+class transaccioncreate(SQLModel):
+    lote_id: int
+    cantidad: float
+    tipo: str = "consumo"
+
+class transacciondb(transaccion, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
+
+class alerta(SQLModel):
+    tipo: str
+    """ 'proximo_a_vencer' | 'vencido' | 'stock_minimo' """
+    producto_id: int | None = Field(default=None, foreign_key="productodb.id")
+    lote_id: int | None = Field(default=None, foreign_key="lotedb.id")
+    fecha_generada: datetime = Field(default_factory=datetime.utcnow)
+    atendida: bool = Field(default=False)
+
+
+class alertadb(alerta, table=True):
+    __table_args__ = (
+        CheckConstraint(
+            "producto_id IS NOT NULL OR lote_id IS NOT NULL",
+            name="chk_alerta_referencia",
+        ),
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
