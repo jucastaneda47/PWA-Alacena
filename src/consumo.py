@@ -11,11 +11,7 @@ router = APIRouter()
 async def registrar_consumo(
     conexion: sesiondb, datos: transaccioncreate, usuario: usuariodb = Depends(confirmacion)
 ):
-    """
-    RF-12: Descuenta cantidad_actual de un lote y deja registro de la
-    transacción. tipo="consumo" para uso normal, tipo="retiro" para dar
-    de baja un producto vencido (ambos casos usan el mismo mecanismo).
-    """
+
     lote = conexion.get(lotedb, datos.lote_id)
     if lote is None or lote.usuario_id != usuario.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lote no encontrado")
