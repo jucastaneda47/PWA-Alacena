@@ -13,7 +13,7 @@ async def crear_categoria(
     datos: categoriacreate,
     usuario: usuariodb = Depends(confirmacion),
 ):
-    """Crea una categoría propia del usuario autenticado."""
+    """Crea una categoría propia del usuario autenticado, con su ícono y color."""
     existente = conexion.exec(
         select(categoriadb).where(
             categoriadb.usuario_id == usuario.id,
@@ -27,7 +27,11 @@ async def crear_categoria(
         )
 
     nueva = categoriadb(
-        nombre=datos.nombre, stock_minimo=datos.stock_minimo, usuario_id=usuario.id
+        nombre=datos.nombre,
+        stock_minimo=datos.stock_minimo,
+        icono=datos.icono,
+        color=datos.color,
+        usuario_id=usuario.id,
     )
     conexion.add(nueva)
     conexion.commit()
@@ -62,6 +66,7 @@ async def actualizar_categoria(
     datos: categoriaupdate,
     usuario: usuariodb = Depends(confirmacion),
 ):
+    """Permite editar nombre, stock mínimo, ícono y/o color de la categoría."""
     categoria = conexion.get(categoriadb, categoria_id)
     if categoria is None or categoria.usuario_id != usuario.id:
         raise HTTPException(
