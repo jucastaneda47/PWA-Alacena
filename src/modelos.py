@@ -48,21 +48,21 @@ class verificarpin(SQLModel):
 class categoria(SQLModel):
     nombre: str
     stock_minimo: float = Field(default=0)
-
+    icono: str = Field(default="package")
+    color: str = Field(default="slate") 
 
 class categoriacreate(categoria):
     ...
 
-
 class categoriaupdate(SQLModel):
     nombre: str | None = None
     stock_minimo: float | None = None
-
+    icono: str | None = None
+    color: str | None = None
 
 class categoriadb(categoria, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
-    """A qué usuario le pertenece esta categoría. Cada usuario tiene las suyas."""
 
 
 class unidadmedida(SQLModel):

@@ -17,7 +17,7 @@ load_dotenv(BASE_DIR / ".env")
 
 algo2=str(os.getenv("algo2"))
 router = APIRouter()
-t_estatico = 30
+t_estatico = 10
 algo= "HS256"
 oauth2= OAuth2PasswordBearer(tokenUrl="login")
 
@@ -70,7 +70,7 @@ async def inicio(conexion: sesiondb, formulario: OAuth2PasswordRequestForm = Dep
             detail="Debes verificar tu correo antes de iniciar sesión"
         )
 
-    tiempo=datetime.utcnow()+timedelta(seconds=t_estatico)
+    tiempo=datetime.utcnow()+timedelta(minutes=t_estatico)
     acces_token={"sub":str(user.id),"exp":tiempo}
     return{
         "access_token":jwt.encode(acces_token,algo2,algorithm=algo), "token_type":"bearer"
