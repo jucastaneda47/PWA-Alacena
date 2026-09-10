@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from db import crear_tablas
-import usuarios, categoria,productos,unidades_medidas,compras,lotes,inventario,consumo,alertas
+import usuarios, categoria,productos,unidades_medidas,compras,lotes,inventario,consumo,alertas,estadisticas
 from fastapi.middleware.cors import CORSMiddleware
 
 app=FastAPI(lifespan=crear_tablas)
@@ -13,6 +13,7 @@ app.include_router(lotes.router)
 app.include_router(inventario.router)
 app.include_router(consumo.router)
 app.include_router(alertas.router)
+app.include_router(estadisticas.router)
 
 app.add_middleware(
     CORSMiddleware,
