@@ -1,15 +1,43 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import alertadb, lotedb, productodb, categoriadb, usuariodb
+from modelos import alertadb, lotedb, productodb, categoriadb, unidadmedidadb, usuariodb
 from usuarios import confirmacion
 from clasificacion import calcular_estado
 
 router = APIRouter()
 
 
+def _calcular_stock_producto(conexion, producto):
+    """Devuelve (cantidad_total_disponible, stock_minimo_efectivo) de un producto."""
+    lotes = conexion.exec(
+        select(lotedb).where(
+            lotedb.usuario_id == producto.usuario_id,
+            lotedb.producto_id == producto.id,
+            lotedb.cantidad_actual > 0,
+        )
+    ).all()
+    total = sum(l.cantidad_actual for l in lotes)
+
+    if producto.stock_minimo is not None:
+        minimo = producto.stock_minimo
+    else:
+        categoria = conexion.get(categoriadb, producto.categoria_id)
+        minimo = categoria.stock_minimo if categoria else 0
+
+    return total, minimo
+
+
 def _sincronizar_alertas(conexion, usuario_id: int):
-  
+    """
+    Revisa el inventario del usuario y crea las alertas que falten:
+    - 'proximo_a_vencer' / 'vencido' por cada lote con stock disponible
+    - 'stock_minimo' por cada producto cuyo stock total esté por debajo
+      de su mínimo (propio, o heredado de su categoría si no tiene uno)
+
+    No duplica: si ya existe una alerta de ese tipo para ese lote/producto
+    (atendida o no), no genera otra.
+    """
     lotes = conexion.exec(
         select(lotedb).where(lotedb.usuario_id == usuario_id, lotedb.cantidad_actual > 0)
     ).all()
@@ -43,13 +71,7 @@ def _sincronizar_alertas(conexion, usuario_id: int):
     ).all()
 
     for producto in productos:
-        total_disponible = sum(l.cantidad_actual for l in lotes if l.producto_id == producto.id)
-
-        if producto.stock_minimo is not None:
-            minimo = producto.stock_minimo
-        else:
-            categoria = conexion.get(categoriadb, producto.categoria_id)
-            minimo = categoria.stock_minimo if categoria else 0
+        total_disponible, minimo = _calcular_stock_producto(conexion, producto)
 
         if total_disponible >= minimo:
             continue
@@ -76,7 +98,12 @@ async def listar_alertas(
     atendida: bool | None = None,
     usuario: usuariodb = Depends(confirmacion),
 ):
-
+    """
+    RF-16/17/18: sincroniza las alertas del usuario contra su inventario
+    actual y las devuelve. Para las de tipo 'stock_minimo' agrega
+    cantidad_actual, stock_minimo y unidad_abreviatura, para poder
+    mostrarlas con detalle en el frontend sin otra consulta.
+    """
     _sincronizar_alertas(conexion, usuario.id)
 
     consulta = select(alertadb).where(alertadb.usuario_id == usuario.id)
@@ -89,17 +116,29 @@ async def listar_alertas(
     respuesta = []
     for alerta in alertas:
         producto = conexion.get(productodb, alerta.producto_id) if alerta.producto_id else None
-        respuesta.append(
-            {
-                "id": alerta.id,
-                "tipo": alerta.tipo,
-                "producto_id": alerta.producto_id,
-                "producto_nombre": producto.nombre if producto else None,
-                "lote_id": alerta.lote_id,
-                "fecha_generada": alerta.fecha_generada,
-                "atendida": alerta.atendida,
-            }
-        )
+
+        item = {
+            "id": alerta.id,
+            "tipo": alerta.tipo,
+            "producto_id": alerta.producto_id,
+            "producto_nombre": producto.nombre if producto else None,
+            "lote_id": alerta.lote_id,
+            "fecha_generada": alerta.fecha_generada,
+            "atendida": alerta.atendida,
+            "cantidad_actual": None,
+            "stock_minimo": None,
+            "unidad_abreviatura": None,
+        }
+
+        if alerta.tipo == "stock_minimo" and producto is not None:
+            total, minimo = _calcular_stock_producto(conexion, producto)
+            unidad = conexion.get(unidadmedidadb, producto.unidad_de_medida_id)
+            item["cantidad_actual"] = total
+            item["stock_minimo"] = minimo
+            item["unidad_abreviatura"] = unidad.abreviatura if unidad else None
+
+        respuesta.append(item)
+
     return respuesta
 
 
