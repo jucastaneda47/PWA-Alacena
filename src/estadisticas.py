@@ -450,3 +450,58 @@ async def ranking_productos(
         {"producto_id": producto_id, "producto_nombre": nombres[producto_id], "veces_comprado": veces}
         for producto_id, veces in ranking
     ]
+
+@router.get("/estadisticas/comprado-vs-consumido-categoria", tags=["estadisticas"])
+async def comprado_vs_consumido_por_categoria(
+    conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)
+):
+    """
+    Módulo Compras e inventario. Por cada categoría con actividad, cuántas
+    veces se compró (lotes registrados) contra cuántas veces se consumió
+    (transacciones tipo='consumo', igual criterio que el gráfico de
+    Movimientos — 'retiro' no cuenta como consumo). Histórico total, sin
+    filtro de fecha.
+    """
+    filas = conexion.exec(
+        select(lotedb, productodb, categoriadb)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .join(categoriadb, productodb.categoria_id == categoriadb.id)
+        .where(lotedb.usuario_id == usuario.id)
+    ).all()
+
+    if not filas:
+        return []
+
+    lote_a_categoria = {lote.id: categoria for lote, _producto, categoria in filas}
+    categorias_info = {categoria.id: categoria for _lote, _producto, categoria in filas}
+
+    comprados = defaultdict(int)
+    for lote, _producto, categoria in filas:
+        comprados[categoria.id] += 1
+
+    transacciones = conexion.exec(
+        select(transacciondb).where(
+            transacciondb.usuario_id == usuario.id,
+            transacciondb.tipo == "consumo",
+        )
+    ).all()
+    consumidos = defaultdict(int)
+    for t in transacciones:
+        categoria = lote_a_categoria.get(t.lote_id)
+        if categoria:
+            consumidos[categoria.id] += 1
+
+    categorias_con_datos = set(comprados) | set(consumidos)
+    resultado = [
+        {
+            "categoria_id": cat_id,
+            "categoria_nombre": categorias_info[cat_id].nombre,
+            "color": categorias_info[cat_id].color,
+            "icono": categorias_info[cat_id].icono,
+            "comprados": comprados.get(cat_id, 0),
+            "consumidos": consumidos.get(cat_id, 0),
+        }
+        for cat_id in categorias_con_datos
+    ]
+    resultado.sort(key=lambda x: x["comprados"] + x["consumidos"], reverse=True)
+    return resultado
