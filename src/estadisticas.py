@@ -11,6 +11,7 @@ from modelos import (
     productodb,
     unidadmedidadb,
     usuariodb,
+    alertadb
 )
 from clasificacion import calcular_estado, UMBRAL_PROXIMO_DIAS
 from usuarios import confirmacion
@@ -609,3 +610,78 @@ async def aprovechamiento_total(conexion: sesiondb, usuario: usuariodb = Depends
         # se cuenta: su resultado aún no está definido.
 
     return {"aprovechados": aprovechados, "desperdiciados": desperdiciados}
+
+@router.get("/estadisticas/alertas-por-periodo", tags=["estadisticas"])
+async def alertas_por_periodo(
+    conexion: sesiondb,
+    periodo: str = "semana",
+    cantidad_periodos: int = 6,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """
+    Módulo Alertas y seguimiento. Cuántas alertas se generaron por
+    período (semana o mes), separadas por tipo, para ver la tendencia
+    en el tiempo — igual estilo que el gráfico de Movimientos.
+    """
+    if periodo not in ("semana", "mes"):
+        periodo = "semana"
+
+    alertas = conexion.exec(
+        select(alertadb).where(alertadb.usuario_id == usuario.id)
+    ).all()
+
+    conteo = defaultdict(lambda: defaultdict(int))
+    for a in alertas:
+        clave = _clave_periodo(a.fecha_generada.date(), periodo)
+        conteo[clave][a.tipo] += 1
+
+    claves = _generar_claves(periodo, cantidad_periodos)
+
+    return [
+        {
+            "periodo": _etiqueta_periodo(clave, periodo),
+            "proximo_a_vencer": conteo[clave].get("proximo_a_vencer", 0),
+            "vencido": conteo[clave].get("vencido", 0),
+            "stock_minimo": conteo[clave].get("stock_minimo", 0),
+        }
+        for clave in claves
+    ]
+
+
+@router.get("/estadisticas/alertas-atencion", tags=["estadisticas"])
+async def alertas_atencion_por_tipo(
+    conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)
+):
+    """
+    Módulo Alertas y seguimiento. Por cada tipo de alerta, cuántas
+    fueron atendidas contra cuántas siguen pendientes — mide qué tan al
+    día está el usuario con el seguimiento.
+    """
+    alertas = conexion.exec(
+        select(alertadb).where(alertadb.usuario_id == usuario.id)
+    ).all()
+
+    conteo = defaultdict(lambda: {"atendidas": 0, "pendientes": 0})
+    for a in alertas:
+        if a.atendida:
+            conteo[a.tipo]["atendidas"] += 1
+        else:
+            conteo[a.tipo]["pendientes"] += 1
+
+    etiquetas_tipo = {
+        "vencido": "Vencido",
+        "proximo_a_vencer": "Próximo a vencer",
+        "stock_minimo": "Stock mínimo",
+    }
+    orden = ["vencido", "proximo_a_vencer", "stock_minimo"]
+
+    return [
+        {
+            "tipo": tipo,
+            "tipo_nombre": etiquetas_tipo[tipo],
+            "atendidas": conteo[tipo]["atendidas"],
+            "pendientes": conteo[tipo]["pendientes"],
+        }
+        for tipo in orden
+        if conteo[tipo]["atendidas"] > 0 or conteo[tipo]["pendientes"] > 0
+    ]
