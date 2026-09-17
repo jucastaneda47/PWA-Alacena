@@ -191,3 +191,95 @@ async def productos_de_categoria(
     ]
     respuesta.sort(key=lambda x: x["veces_comprado"], reverse=True)
     return respuesta
+
+
+def _resumen_desperdicio_por_mes(conexion, usuario_id: int, claves_mes: set[tuple[int, int]]):
+    """
+    Para los lotes cuyo mes de vencimiento está entre los meses solicitados,
+    determina cuántos se "desperdiciaron": aquellos a los que, al llegar su
+    fecha de vencimiento, todavía les quedaba cantidad sin consumir. Solo
+    cuentan como consumo real las transacciones tipo='consumo' registradas
+    hasta (inclusive) la fecha de vencimiento del lote — un 'retiro' nunca
+    cuenta como consumo, porque retirar YA es desperdicio.
+
+    Como solo mira transacciones anteriores o iguales a la fecha de
+    vencimiento, el resultado de un mes ya cerrado no cambia después,
+    sin importar si el usuario retira el lote hoy, en un mes o nunca.
+    """
+    lotes = conexion.exec(select(lotedb).where(lotedb.usuario_id == usuario_id)).all()
+    lotes_relevantes = [
+        l for l in lotes if (l.fecha_vencimiento.year, l.fecha_vencimiento.month) in claves_mes
+    ]
+    if not lotes_relevantes:
+        return {}
+
+    ids_lotes = [l.id for l in lotes_relevantes]
+    lotes_por_id = {l.id: l for l in lotes_relevantes}
+
+    consumos = conexion.exec(
+        select(transacciondb).where(
+            transacciondb.lote_id.in_(ids_lotes),
+            transacciondb.tipo == "consumo",
+        )
+    ).all()
+
+    consumido_por_lote = defaultdict(float)
+    for t in consumos:
+        lote = lotes_por_id.get(t.lote_id)
+        if lote and t.fecha.date() <= lote.fecha_vencimiento:
+            consumido_por_lote[t.lote_id] += t.cantidad
+
+    resumen = defaultdict(lambda: {"total": 0, "desperdiciados": 0})
+    for lote in lotes_relevantes:
+        clave = (lote.fecha_vencimiento.year, lote.fecha_vencimiento.month)
+        resumen[clave]["total"] += 1
+        consumido = consumido_por_lote.get(lote.id, 0)
+        if consumido < lote.cantidad_inicial:
+            resumen[clave]["desperdiciados"] += 1
+
+    return resumen
+
+
+@router.get("/estadisticas/desperdicio", tags=["estadisticas"])
+async def evolucion_desperdicio(
+    conexion: sesiondb,
+    cantidad_meses: int = 6,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """
+    Evolución mensual del % de lotes desperdiciados, agrupados por su mes
+    de vencimiento. Solo incluye meses ya cerrados (el mes en curso no
+    tiene un % definitivo todavía, porque aún pueden vencerse más lotes
+    dentro de él). Si un mes no tuvo ningún lote por vencer, se devuelve
+    porcentaje_desperdicio=None para que el frontend lo muestre como un
+    hueco real en la gráfica, no como 0%.
+    """
+    hoy = date.today()
+    primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
+
+    claves = []
+    cursor = primer_dia_mes_actual
+    for _ in range(cantidad_meses):
+        cursor = (cursor - timedelta(days=1)).replace(day=1)
+        claves.append((cursor.year, cursor.month))
+    claves.reverse()
+
+    resumen = _resumen_desperdicio_por_mes(conexion, usuario.id, set(claves))
+
+    resultado = []
+    for clave in claves:
+        datos = resumen.get(clave, {"total": 0, "desperdiciados": 0})
+        porcentaje = (
+            round((datos["desperdiciados"] / datos["total"]) * 100, 1)
+            if datos["total"] > 0
+            else None
+        )
+        resultado.append(
+            {
+                "periodo": f"{MESES_ES[clave[1]]} {clave[0]}",
+                "total_lotes": datos["total"],
+                "lotes_desperdiciados": datos["desperdiciados"],
+                "porcentaje_desperdicio": porcentaje,
+            }
+        )
+    return resultado
