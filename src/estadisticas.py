@@ -1,9 +1,9 @@
 from datetime import date, timedelta
 from collections import defaultdict
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import lotedb, compradb, transacciondb, usuariodb
+from modelos import lotedb, compradb, transacciondb, categoriadb, productodb, usuariodb
 from usuarios import confirmacion
 
 router = APIRouter()
@@ -41,6 +41,16 @@ def _generar_claves(periodo: str, cantidad: int):
             cursor -= timedelta(weeks=1)
     claves.reverse()
     return claves
+
+
+def _productos_en_inventario(conexion, usuario_id: int) -> set[int]:
+    """IDs de productos que tienen al menos un lote con stock disponible ahora mismo."""
+    ids = conexion.exec(
+        select(lotedb.producto_id).where(
+            lotedb.usuario_id == usuario_id, lotedb.cantidad_actual > 0
+        )
+    ).all()
+    return set(ids)
 
 
 @router.get("/estadisticas/movimientos", tags=["estadisticas"])
@@ -90,3 +100,93 @@ async def compras_vs_consumo(
         }
         for clave in claves
     ]
+
+
+@router.get("/estadisticas/distribucion-categorias", tags=["estadisticas"])
+async def distribucion_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
+    """
+    Cuenta cuántos productos distintos tiene cada categoría, contando SOLO
+    los que tienen stock disponible ahora mismo (al menos un lote con
+    cantidad_actual > 0) — así refleja el inventario actual, no el
+    catálogo histórico de productos que alguna vez se crearon.
+    """
+    ids_en_inventario = _productos_en_inventario(conexion, usuario.id)
+    if not ids_en_inventario:
+        return []
+
+    categorias = conexion.exec(
+        select(categoriadb).where(categoriadb.usuario_id == usuario.id)
+    ).all()
+    productos = conexion.exec(
+        select(productodb).where(
+            productodb.usuario_id == usuario.id,
+            productodb.id.in_(ids_en_inventario),
+        )
+    ).all()
+
+    conteo = defaultdict(int)
+    for p in productos:
+        conteo[p.categoria_id] += 1
+
+    respuesta = []
+    for c in categorias:
+        cantidad = conteo.get(c.id, 0)
+        if cantidad == 0:
+            continue
+        respuesta.append(
+            {
+                "categoria_id": c.id,
+                "categoria_nombre": c.nombre,
+                "color": c.color,
+                "cantidad_productos": cantidad,
+            }
+        )
+
+    respuesta.sort(key=lambda x: x["cantidad_productos"], reverse=True)
+    return respuesta
+
+
+@router.get(
+    "/estadisticas/distribucion-categorias/{categoria_id}/productos", tags=["estadisticas"]
+)
+async def productos_de_categoria(
+    conexion: sesiondb, categoria_id: int, usuario: usuariodb = Depends(confirmacion)
+):
+    """
+    Detalle al hacer clic en una porción: los productos de esa categoría
+    que TIENEN STOCK ACTUAL, con cuántas veces se compró cada uno en total
+    (histórico, número de lotes registrados alguna vez para ese producto).
+    """
+    categoria = conexion.get(categoriadb, categoria_id)
+    if categoria is None or categoria.usuario_id != usuario.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Categoría no encontrada"
+        )
+
+    ids_en_inventario = _productos_en_inventario(conexion, usuario.id)
+    if not ids_en_inventario:
+        return []
+
+    productos = conexion.exec(
+        select(productodb).where(
+            productodb.usuario_id == usuario.id,
+            productodb.categoria_id == categoria_id,
+            productodb.id.in_(ids_en_inventario),
+        )
+    ).all()
+
+    lotes = conexion.exec(select(lotedb).where(lotedb.usuario_id == usuario.id)).all()
+    conteo_lotes = defaultdict(int)
+    for l in lotes:
+        conteo_lotes[l.producto_id] += 1
+
+    respuesta = [
+        {
+            "producto_id": p.id,
+            "producto_nombre": p.nombre,
+            "veces_comprado": conteo_lotes.get(p.id, 0),
+        }
+        for p in productos
+    ]
+    respuesta.sort(key=lambda x: x["veces_comprado"], reverse=True)
+    return respuesta
