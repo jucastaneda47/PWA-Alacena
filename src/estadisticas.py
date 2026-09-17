@@ -138,6 +138,7 @@ async def distribucion_por_categoria(conexion: sesiondb, usuario: usuariodb = De
                 "categoria_id": c.id,
                 "categoria_nombre": c.nombre,
                 "color": c.color,
+                "icono": c.icono,
                 "cantidad_productos": cantidad,
             }
         )
