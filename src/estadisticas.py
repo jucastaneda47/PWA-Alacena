@@ -12,6 +12,7 @@ from modelos import (
     unidadmedidadb,
     usuariodb,
 )
+from clasificacion import calcular_estado, UMBRAL_PROXIMO_DIAS
 from usuarios import confirmacion
 
 router = APIRouter()
@@ -505,3 +506,106 @@ async def comprado_vs_consumido_por_categoria(
     ]
     resultado.sort(key=lambda x: x["comprados"] + x["consumidos"], reverse=True)
     return resultado
+
+@router.get("/estadisticas/riesgo-categoria", tags=["estadisticas"])
+async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
+    """
+    Módulo Consumo y vencimientos. Cuenta, por categoría, cuántos lotes
+    CON STOCK ACTUAL están en este momento próximos a vencer o ya
+    vencidos — solo lo que está en riesgo ahora mismo, no todo el
+    inventario. El estado se recalcula al vuelo (no se confía en el
+    campo `estado` guardado, que solo se actualiza cuando se consulta
+    /inventario).
+    """
+    filas = conexion.exec(
+        select(lotedb, productodb, categoriadb)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .join(categoriadb, productodb.categoria_id == categoriadb.id)
+        .where(lotedb.usuario_id == usuario.id, lotedb.cantidad_actual > 0)
+    ).all()
+
+    conteo = defaultdict(int)
+    categorias_info = {}
+    for lote, _producto, categoria in filas:
+        estado = calcular_estado(lote.fecha_vencimiento)
+        if estado in ("proximo_a_vencer", "vencido"):
+            conteo[categoria.id] += 1
+            categorias_info[categoria.id] = categoria
+
+    resultado = [
+        {
+            "categoria_id": cat_id,
+            "categoria_nombre": categorias_info[cat_id].nombre,
+            "color": categorias_info[cat_id].color,
+            "icono": categorias_info[cat_id].icono,
+            "cantidad_lotes": cantidad,
+        }
+        for cat_id, cantidad in conteo.items()
+    ]
+    resultado.sort(key=lambda x: x["cantidad_lotes"], reverse=True)
+    return resultado
+
+
+@router.get("/estadisticas/aprovechamiento", tags=["estadisticas"])
+async def aprovechamiento_total(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
+    """
+    Módulo Consumo y vencimientos. Sobre los lotes que llegaron a estar
+    en riesgo (vencidos, o próximos a vencer y ya resueltos), cuántos se
+    consumieron por completo a tiempo (consumidos mientras aún se podía,
+    dentro de la ventana de 'próximo a vencer' o antes) contra cuántos
+    llegaron a vencerse con cantidad sin consumir. Una vez un lote está
+    vencido ya no se puede registrar consumo sobre él — solo retiro —
+    así que cualquier lote vencido con cantidad pendiente (retirada o
+    no) cuenta como desperdicio, tenga o no también consumo parcial
+    previo. Los lotes vigentes, y los próximos a vencer que todavía
+    tienen cantidad sin resolver, se excluyen a propósito: su resultado
+    aún no está definido.
+    """
+    hoy = date.today()
+    lotes = conexion.exec(
+        select(lotedb).where(lotedb.usuario_id == usuario.id)
+    ).all()
+
+    if not lotes:
+        return {"aprovechados": 0, "desperdiciados": 0}
+
+    ids_lotes = [l.id for l in lotes]
+    transacciones = conexion.exec(
+        select(transacciondb).where(transacciondb.lote_id.in_(ids_lotes))
+    ).all()
+
+    tiene_retiro = set()
+    fecha_ultimo_consumo = {}
+    for t in transacciones:
+        if t.tipo == "retiro":
+            tiene_retiro.add(t.lote_id)
+        elif t.tipo == "consumo":
+            fecha = t.fecha.date()
+            anterior = fecha_ultimo_consumo.get(t.lote_id)
+            if anterior is None or fecha > anterior:
+                fecha_ultimo_consumo[t.lote_id] = fecha
+
+    aprovechados = 0
+    desperdiciados = 0
+    for lote in lotes:
+        if lote.id in tiene_retiro:
+            # Llegó a vencido con cantidad pendiente y hubo que retirarla.
+            desperdiciados += 1
+            continue
+
+        if lote.cantidad_actual <= 0:
+            # Se consumió por completo sin necesitar retiro. Solo cuenta
+            # como "a tiempo" si ese último consumo ocurrió dentro de la
+            # ventana de riesgo (próximo a vencer) o antes de vencer.
+            ultimo = fecha_ultimo_consumo.get(lote.id)
+            if ultimo is not None and (lote.fecha_vencimiento - ultimo).days <= UMBRAL_PROXIMO_DIAS:
+                aprovechados += 1
+            continue
+
+        # Todavía tiene cantidad sin consumir y sin retirar.
+        if lote.fecha_vencimiento <= hoy:
+            desperdiciados += 1
+        # Si está vigente, o próximo a vencer sin resolver todavía, no
+        # se cuenta: su resultado aún no está definido.
+
+    return {"aprovechados": aprovechados, "desperdiciados": desperdiciados}
