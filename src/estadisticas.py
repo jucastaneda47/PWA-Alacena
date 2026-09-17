@@ -399,3 +399,54 @@ async def historial_movimientos(
         "eventos": [{**e, "fecha": e["fecha"].isoformat()} for e in eventos],
         "total": len(eventos),
     }
+
+
+def _fecha_hace_meses(fecha: date, meses: int) -> date:
+    mes = fecha.month - meses
+    anio = fecha.year
+    while mes <= 0:
+        mes += 12
+        anio -= 1
+    dia = min(fecha.day, 28)  # evita desbordes en meses cortos (ej. 31 de enero - 2 meses)
+    return date(anio, mes, dia)
+
+
+@router.get("/estadisticas/ranking-productos", tags=["estadisticas"])
+async def ranking_productos(
+    conexion: sesiondb,
+    periodo: str = "reciente",
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """
+    Top 5 productos por número de veces comprados (cuenta lotes/compras
+    registradas, no cantidades sumadas, igual que el resto de estadísticas).
+
+    periodo="reciente" (por defecto): solo compras de los últimos 2 meses.
+    periodo="historico": desde siempre.
+    """
+    if periodo not in ("reciente", "historico"):
+        periodo = "reciente"
+
+    filas = conexion.exec(
+        select(lotedb, compradb, productodb)
+        .join(compradb, lotedb.compra_id == compradb.id)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .where(lotedb.usuario_id == usuario.id)
+    ).all()
+
+    if periodo == "reciente":
+        limite = _fecha_hace_meses(date.today(), 2)
+        filas = [fila for fila in filas if fila[1].fecha_compra >= limite]
+
+    conteo = defaultdict(int)
+    nombres = {}
+    for _lote, _compra, producto in filas:
+        conteo[producto.id] += 1
+        nombres[producto.id] = producto.nombre
+
+    ranking = sorted(conteo.items(), key=lambda item: item[1], reverse=True)[:5]
+
+    return [
+        {"producto_id": producto_id, "producto_nombre": nombres[producto_id], "veces_comprado": veces}
+        for producto_id, veces in ranking
+    ]
