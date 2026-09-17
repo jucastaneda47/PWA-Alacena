@@ -1,9 +1,17 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import lotedb, compradb, transacciondb, categoriadb, productodb, usuariodb
+from modelos import (
+    lotedb,
+    compradb,
+    transacciondb,
+    categoriadb,
+    productodb,
+    unidadmedidadb,
+    usuariodb,
+)
 from usuarios import confirmacion
 
 router = APIRouter()
@@ -283,3 +291,111 @@ async def evolucion_desperdicio(
             }
         )
     return resultado
+
+
+@router.get("/estadisticas/historial", tags=["estadisticas"])
+async def historial_movimientos(
+    conexion: sesiondb,
+    tipos: str = "compra,consumo,retiro,vencimiento",
+    desde: date | None = None,
+    hasta: date | None = None,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """
+    Línea de tiempo unificada de 3 tipos de eventos: compras (un lote
+    creado), consumos/retiros (transacciones) y vencimientos (un lote que
+    llegó a su fecha de vencimiento). Devuelve TODOS los eventos que
+    cumplen el filtro, ordenados de más reciente a más antiguo.
+
+    No pagina aquí a propósito: si paginara mezclando los 3 tipos en un
+    solo "top N global", un tipo con eventos menos frecuentes (por
+    ejemplo, vencimientos) podía quedar completamente fuera de la primera
+    página aunque sí existiera. El frontend decide cuánto mostrar —por
+    carril cuando no hay filtro de fecha, o todo de una vez cuando el
+    usuario sí fija un rango de fechas.
+    """
+    tipos_activos = {t.strip() for t in tipos.split(",") if t.strip()}
+
+    filas = conexion.exec(
+        select(lotedb, productodb, unidadmedidadb)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .join(unidadmedidadb, productodb.unidad_de_medida_id == unidadmedidadb.id)
+        .where(lotedb.usuario_id == usuario.id)
+    ).all()
+
+    eventos = []
+    lotes_info = {}
+    for lote, producto, unidad in filas:
+        lotes_info[lote.id] = (lote, producto, unidad)
+
+    if "compra" in tipos_activos and filas:
+        compras = conexion.exec(
+            select(compradb).where(compradb.usuario_id == usuario.id)
+        ).all()
+        compras_por_id = {c.id: c for c in compras}
+        for lote, producto, unidad in filas:
+            compra = compras_por_id.get(lote.compra_id)
+            if compra is None:
+                continue
+            eventos.append(
+                {
+                    "id": f"compra-{lote.id}",
+                    "tipo": "compra",
+                    "fecha": datetime.combine(compra.fecha_compra, time(9, 0)),
+                    "titulo": f"Compraste {producto.nombre}",
+                    "detalle": f"{lote.cantidad_inicial} {unidad.abreviatura} · vence {lote.fecha_vencimiento.isoformat()}",
+                }
+            )
+
+    if ("consumo" in tipos_activos or "retiro" in tipos_activos) and filas:
+        transacciones = conexion.exec(
+            select(transacciondb).where(transacciondb.usuario_id == usuario.id)
+        ).all()
+        for t in transacciones:
+            if t.tipo not in tipos_activos:
+                continue
+            info = lotes_info.get(t.lote_id)
+            if info is None:
+                continue
+            _lote, producto, unidad = info
+            verbo = "Consumiste" if t.tipo == "consumo" else "Retiraste"
+            eventos.append(
+                {
+                    "id": f"{t.tipo}-{t.id}",
+                    "tipo": t.tipo,
+                    "fecha": t.fecha,
+                    "titulo": f"{verbo} {producto.nombre}",
+                    "detalle": f"{t.cantidad} {unidad.abreviatura}",
+                }
+            )
+
+    if "vencimiento" in tipos_activos and filas:
+        hoy = date.today()
+        for lote, producto, unidad in filas:
+            if lote.fecha_vencimiento <= hoy:
+                quedaba_sin_consumir = lote.cantidad_actual > 0
+                eventos.append(
+                    {
+                        "id": f"vencimiento-{lote.id}",
+                        "tipo": "vencimiento",
+                        "fecha": datetime.combine(lote.fecha_vencimiento, time(9, 0)),
+                        "titulo": f"Venció {producto.nombre}",
+                        "detalle": (
+                            f"Quedaban {lote.cantidad_actual} {unidad.abreviatura} sin consumir"
+                            if quedaba_sin_consumir
+                            else "Se había consumido todo a tiempo"
+                        ),
+                    }
+                )
+
+    if desde is not None:
+        eventos = [e for e in eventos if e["fecha"].date() >= desde]
+    if hasta is not None:
+        eventos = [e for e in eventos if e["fecha"].date() <= hasta]
+
+    eventos.sort(key=lambda e: e["fecha"], reverse=True)
+
+    return {
+        "eventos": [{**e, "fecha": e["fecha"].isoformat()} for e in eventos],
+        "total": len(eventos),
+    }
