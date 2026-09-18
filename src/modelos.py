@@ -40,6 +40,8 @@ class usuariodb(usuario,table=True):
     esta_verificado: bool = Field(default=False)
     pin_verificacion: str | None = Field(default=None)
     pin_expiracion: datetime | None = Field(default=None)
+    promedio_desperdicio: float = Field(default=10.0)
+    meta_desperdicio: float = Field(default=2.0)
 
 class verificarpin(SQLModel):
     correo: EmailStr

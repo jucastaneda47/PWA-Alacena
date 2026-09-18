@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException, status, Depends
-from sqlmodel import select
+from sqlmodel import select, SQLModel
 from db import sesiondb
 from modelos import (
     lotedb,
@@ -10,11 +10,11 @@ from modelos import (
     categoriadb,
     productodb,
     unidadmedidadb,
+    alertadb,
     usuariodb,
-    alertadb
 )
-from clasificacion import calcular_estado, UMBRAL_PROXIMO_DIAS
 from usuarios import confirmacion
+from clasificacion import calcular_estado, calcular_dias_restantes
 
 router = APIRouter()
 
@@ -215,16 +215,27 @@ def _resumen_desperdicio_por_mes(conexion, usuario_id: int, claves_mes: set[tupl
     Como solo mira transacciones anteriores o iguales a la fecha de
     vencimiento, el resultado de un mes ya cerrado no cambia después,
     sin importar si el usuario retira el lote hoy, en un mes o nunca.
+
+    Además arma, por cada mes, un conteo de cuántas veces se desperdició
+    cada producto — para mostrar cuáles pesaron más en ese mes puntual al
+    pasar el mouse sobre el gráfico.
     """
-    lotes = conexion.exec(select(lotedb).where(lotedb.usuario_id == usuario_id)).all()
+    filas = conexion.exec(
+        select(lotedb, productodb, categoriadb)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .join(categoriadb, productodb.categoria_id == categoriadb.id)
+        .where(lotedb.usuario_id == usuario_id)
+    ).all()
     lotes_relevantes = [
-        l for l in lotes if (l.fecha_vencimiento.year, l.fecha_vencimiento.month) in claves_mes
+        (lote, producto, categoria)
+        for lote, producto, categoria in filas
+        if (lote.fecha_vencimiento.year, lote.fecha_vencimiento.month) in claves_mes
     ]
     if not lotes_relevantes:
-        return {}
+        return {}, {}
 
-    ids_lotes = [l.id for l in lotes_relevantes]
-    lotes_por_id = {l.id: l for l in lotes_relevantes}
+    ids_lotes = [lote.id for lote, _producto, _categoria in lotes_relevantes]
+    lotes_por_id = {lote.id: lote for lote, _producto, _categoria in lotes_relevantes}
 
     consumos = conexion.exec(
         select(transacciondb).where(
@@ -239,15 +250,22 @@ def _resumen_desperdicio_por_mes(conexion, usuario_id: int, claves_mes: set[tupl
         if lote and t.fecha.date() <= lote.fecha_vencimiento:
             consumido_por_lote[t.lote_id] += t.cantidad
 
-    resumen = defaultdict(lambda: {"total": 0, "desperdiciados": 0})
-    for lote in lotes_relevantes:
+    resumen = defaultdict(lambda: {"total": 0, "desperdiciados": 0, "productos": defaultdict(int)})
+    productos_info = {}
+    for lote, producto, categoria in lotes_relevantes:
         clave = (lote.fecha_vencimiento.year, lote.fecha_vencimiento.month)
         resumen[clave]["total"] += 1
+        productos_info[producto.id] = {
+            "nombre": producto.nombre,
+            "color": categoria.color,
+            "icono": categoria.icono,
+        }
         consumido = consumido_por_lote.get(lote.id, 0)
         if consumido < lote.cantidad_inicial:
             resumen[clave]["desperdiciados"] += 1
+            resumen[clave]["productos"][producto.id] += 1
 
-    return resumen
+    return resumen, productos_info
 
 
 @router.get("/estadisticas/desperdicio", tags=["estadisticas"])
@@ -262,7 +280,9 @@ async def evolucion_desperdicio(
     tiene un % definitivo todavía, porque aún pueden vencerse más lotes
     dentro de él). Si un mes no tuvo ningún lote por vencer, se devuelve
     porcentaje_desperdicio=None para que el frontend lo muestre como un
-    hueco real en la gráfica, no como 0%.
+    hueco real en la gráfica, no como 0%. Cada mes incluye además los
+    hasta 3 productos que más se desperdiciaron ese mes puntual, para el
+    detalle contextual al pasar el mouse sobre el gráfico.
     """
     hoy = date.today()
     primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
@@ -274,25 +294,80 @@ async def evolucion_desperdicio(
         claves.append((cursor.year, cursor.month))
     claves.reverse()
 
-    resumen = _resumen_desperdicio_por_mes(conexion, usuario.id, set(claves))
+    resumen, productos_info = _resumen_desperdicio_por_mes(conexion, usuario.id, set(claves))
 
     resultado = []
     for clave in claves:
-        datos = resumen.get(clave, {"total": 0, "desperdiciados": 0})
+        datos = resumen.get(clave, {"total": 0, "desperdiciados": 0, "productos": {}})
         porcentaje = (
             round((datos["desperdiciados"] / datos["total"]) * 100, 1)
             if datos["total"] > 0
             else None
         )
+        top_productos = sorted(
+            datos["productos"].items(), key=lambda par: par[1], reverse=True
+        )[:3]
         resultado.append(
             {
                 "periodo": f"{MESES_ES[clave[1]]} {clave[0]}",
                 "total_lotes": datos["total"],
                 "lotes_desperdiciados": datos["desperdiciados"],
                 "porcentaje_desperdicio": porcentaje,
+                "productos_desperdiciados": [
+                    {
+                        "producto_id": producto_id,
+                        "producto_nombre": productos_info[producto_id]["nombre"],
+                        "color": productos_info[producto_id]["color"],
+                        "icono": productos_info[producto_id]["icono"],
+                        "cantidad": cantidad,
+                    }
+                    for producto_id, cantidad in top_productos
+                ],
             }
         )
     return resultado
+
+
+class ConfiguracionDesperdicio(SQLModel):
+    promedio: float | None = None
+    meta: float | None = None
+
+
+@router.get("/estadisticas/desperdicio/configuracion", tags=["estadisticas"])
+async def obtener_configuracion_desperdicio(usuario: usuariodb = Depends(confirmacion)):
+    """
+    Devuelve el promedio de referencia y la meta que el usuario configuró
+    para las líneas punteadas de 'Evolución del % de desperdicio'.
+    """
+    return {"promedio": usuario.promedio_desperdicio, "meta": usuario.meta_desperdicio}
+
+
+@router.patch("/estadisticas/desperdicio/configuracion", tags=["estadisticas"])
+async def actualizar_configuracion_desperdicio(
+    payload: ConfiguracionDesperdicio,
+    conexion: sesiondb,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """
+    Actualiza el promedio de referencia y/o la meta que el usuario
+    configuró para 'Evolución del % de desperdicio'. Solo cambia los
+    campos que vengan en el body; ambos deben ser porcentajes entre 0 y
+    100.
+    """
+    if payload.promedio is not None:
+        if not (0 <= payload.promedio <= 100):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "El promedio debe estar entre 0 y 100.")
+        usuario.promedio_desperdicio = payload.promedio
+    if payload.meta is not None:
+        if not (0 <= payload.meta <= 100):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "La meta debe estar entre 0 y 100.")
+        usuario.meta_desperdicio = payload.meta
+
+    conexion.add(usuario)
+    conexion.commit()
+    conexion.refresh(usuario)
+
+    return {"promedio": usuario.promedio_desperdicio, "meta": usuario.meta_desperdicio}
 
 
 @router.get("/estadisticas/historial", tags=["estadisticas"])
@@ -413,45 +488,62 @@ def _fecha_hace_meses(fecha: date, meses: int) -> date:
     return date(anio, mes, dia)
 
 
+PERIODOS_RANKING = {"1m": 1, "3m": 3, "6m": 6}
+
+
 @router.get("/estadisticas/ranking-productos", tags=["estadisticas"])
 async def ranking_productos(
     conexion: sesiondb,
-    periodo: str = "reciente",
+    periodo: str = "1m",
     usuario: usuariodb = Depends(confirmacion),
 ):
     """
     Top 5 productos por número de veces comprados (cuenta lotes/compras
     registradas, no cantidades sumadas, igual que el resto de estadísticas).
+    Incluye color e ícono de la categoría de cada producto, para mostrar el
+    ranking con la misma identidad visual que el resto del dashboard.
 
-    periodo="reciente" (por defecto): solo compras de los últimos 2 meses.
-    periodo="historico": desde siempre.
+    periodo: "1m" (último mes), "3m" (últimos 3 meses), "6m" (últimos 6
+    meses) o "total" (desde siempre). Por defecto "1m".
     """
-    if periodo not in ("reciente", "historico"):
-        periodo = "reciente"
+    if periodo not in ("1m", "3m", "6m", "total"):
+        periodo = "1m"
 
     filas = conexion.exec(
-        select(lotedb, compradb, productodb)
+        select(lotedb, compradb, productodb, categoriadb)
         .join(compradb, lotedb.compra_id == compradb.id)
         .join(productodb, lotedb.producto_id == productodb.id)
+        .join(categoriadb, productodb.categoria_id == categoriadb.id)
         .where(lotedb.usuario_id == usuario.id)
     ).all()
 
-    if periodo == "reciente":
-        limite = _fecha_hace_meses(date.today(), 2)
+    if periodo != "total":
+        limite = _fecha_hace_meses(date.today(), PERIODOS_RANKING[periodo])
         filas = [fila for fila in filas if fila[1].fecha_compra >= limite]
 
     conteo = defaultdict(int)
-    nombres = {}
-    for _lote, _compra, producto in filas:
+    info_producto = {}
+    for _lote, _compra, producto, categoria in filas:
         conteo[producto.id] += 1
-        nombres[producto.id] = producto.nombre
+        info_producto[producto.id] = {
+            "nombre": producto.nombre,
+            "color": categoria.color,
+            "icono": categoria.icono,
+        }
 
     ranking = sorted(conteo.items(), key=lambda item: item[1], reverse=True)[:5]
 
     return [
-        {"producto_id": producto_id, "producto_nombre": nombres[producto_id], "veces_comprado": veces}
+        {
+            "producto_id": producto_id,
+            "producto_nombre": info_producto[producto_id]["nombre"],
+            "color": info_producto[producto_id]["color"],
+            "icono": info_producto[producto_id]["icono"],
+            "veces_comprado": veces,
+        }
         for producto_id, veces in ranking
     ]
+
 
 @router.get("/estadisticas/comprado-vs-consumido-categoria", tags=["estadisticas"])
 async def comprado_vs_consumido_por_categoria(
@@ -508,15 +600,17 @@ async def comprado_vs_consumido_por_categoria(
     resultado.sort(key=lambda x: x["comprados"] + x["consumidos"], reverse=True)
     return resultado
 
+
 @router.get("/estadisticas/riesgo-categoria", tags=["estadisticas"])
 async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
     """
     Módulo Consumo y vencimientos. Cuenta, por categoría, cuántos lotes
-    CON STOCK ACTUAL están en este momento próximos a vencer o ya
-    vencidos — solo lo que está en riesgo ahora mismo, no todo el
-    inventario. El estado se recalcula al vuelo (no se confía en el
-    campo `estado` guardado, que solo se actualiza cuando se consulta
-    /inventario).
+    CON STOCK ACTUAL están en este momento próximos a vencer — los que
+    ya vencieron no entran acá, esos se resuelven aparte con un retiro.
+    El estado se recalcula al vuelo (no se confía en el campo `estado`
+    guardado, que solo se actualiza cuando se consulta /inventario).
+    Incluye, por categoría, el detalle de qué productos están próximos
+    a vencer y en cuántos días, para el cuadro al pasar el mouse.
     """
     filas = conexion.exec(
         select(lotedb, productodb, categoriadb)
@@ -527,11 +621,18 @@ async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(
 
     conteo = defaultdict(int)
     categorias_info = {}
-    for lote, _producto, categoria in filas:
+    productos_por_categoria = defaultdict(list)
+    for lote, producto, categoria in filas:
         estado = calcular_estado(lote.fecha_vencimiento)
-        if estado in ("proximo_a_vencer", "vencido"):
+        if estado == "proximo_a_vencer":
             conteo[categoria.id] += 1
             categorias_info[categoria.id] = categoria
+            productos_por_categoria[categoria.id].append(
+                {
+                    "producto_nombre": producto.nombre,
+                    "dias_restantes": calcular_dias_restantes(lote.fecha_vencimiento),
+                }
+            )
 
     resultado = [
         {
@@ -540,6 +641,9 @@ async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(
             "color": categorias_info[cat_id].color,
             "icono": categorias_info[cat_id].icono,
             "cantidad_lotes": cantidad,
+            "productos": sorted(
+                productos_por_categoria[cat_id], key=lambda p: p["dias_restantes"]
+            ),
         }
         for cat_id, cantidad in conteo.items()
     ]
@@ -550,66 +654,85 @@ async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(
 @router.get("/estadisticas/aprovechamiento", tags=["estadisticas"])
 async def aprovechamiento_total(conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)):
     """
-    Módulo Consumo y vencimientos. Sobre los lotes que llegaron a estar
-    en riesgo (vencidos, o próximos a vencer y ya resueltos), cuántos se
-    consumieron por completo a tiempo (consumidos mientras aún se podía,
-    dentro de la ventana de 'próximo a vencer' o antes) contra cuántos
-    llegaron a vencerse con cantidad sin consumir. Una vez un lote está
-    vencido ya no se puede registrar consumo sobre él — solo retiro —
-    así que cualquier lote vencido con cantidad pendiente (retirada o
-    no) cuenta como desperdicio, tenga o no también consumo parcial
-    previo. Los lotes vigentes, y los próximos a vencer que todavía
-    tienen cantidad sin resolver, se excluyen a propósito: su resultado
-    aún no está definido.
+    Módulo Consumo y vencimientos. Sobre todos los lotes, cuántos se
+    consumieron por completo sin necesitar retiro — "consumidos a
+    tiempo", esto incluye los que se consumieron mientras el lote
+    todavía estaba vigente, no solo los próximos a vencer — contra
+    cuántos llegaron efectivamente a su fecha de vencimiento con
+    cantidad sin consumir — "vencidos sin consumir". Una vez un lote
+    está vencido ya no se puede registrar consumo sobre él — solo
+    retiro — así que cualquier lote vencido con cantidad pendiente
+    (retirada o no) cuenta como desperdicio. Los lotes vigentes o
+    próximos a vencer que todavía tienen cantidad sin resolver se
+    excluyen: su resultado aún no está definido. Incluye el detalle de
+    productos de cada lado, para el cuadro al pasar el mouse.
     """
     hoy = date.today()
-    lotes = conexion.exec(
-        select(lotedb).where(lotedb.usuario_id == usuario.id)
+    filas = conexion.exec(
+        select(lotedb, productodb)
+        .join(productodb, lotedb.producto_id == productodb.id)
+        .where(lotedb.usuario_id == usuario.id)
     ).all()
 
-    if not lotes:
-        return {"aprovechados": 0, "desperdiciados": 0}
+    if not filas:
+        return {
+            "aprovechados": 0,
+            "desperdiciados": 0,
+            "productos_aprovechados": [],
+            "productos_desperdiciados": [],
+        }
 
-    ids_lotes = [l.id for l in lotes]
+    ids_lotes = [lote.id for lote, _producto in filas]
     transacciones = conexion.exec(
         select(transacciondb).where(transacciondb.lote_id.in_(ids_lotes))
     ).all()
 
-    tiene_retiro = set()
-    fecha_ultimo_consumo = {}
-    for t in transacciones:
-        if t.tipo == "retiro":
-            tiene_retiro.add(t.lote_id)
-        elif t.tipo == "consumo":
-            fecha = t.fecha.date()
-            anterior = fecha_ultimo_consumo.get(t.lote_id)
-            if anterior is None or fecha > anterior:
-                fecha_ultimo_consumo[t.lote_id] = fecha
+    tiene_retiro = {t.lote_id for t in transacciones if t.tipo == "retiro"}
 
     aprovechados = 0
     desperdiciados = 0
-    for lote in lotes:
+    conteo_aprovechados = defaultdict(int)
+    conteo_desperdiciados = defaultdict(int)
+
+    for lote, producto in filas:
         if lote.id in tiene_retiro:
             # Llegó a vencido con cantidad pendiente y hubo que retirarla.
             desperdiciados += 1
+            conteo_desperdiciados[producto.nombre] += 1
             continue
 
         if lote.cantidad_actual <= 0:
-            # Se consumió por completo sin necesitar retiro. Solo cuenta
-            # como "a tiempo" si ese último consumo ocurrió dentro de la
-            # ventana de riesgo (próximo a vencer) o antes de vencer.
-            ultimo = fecha_ultimo_consumo.get(lote.id)
-            if ultimo is not None and (lote.fecha_vencimiento - ultimo).days <= UMBRAL_PROXIMO_DIAS:
-                aprovechados += 1
+            # Se consumió por completo sin necesitar retiro — sin
+            # importar si eso pasó mientras estaba vigente o próximo a
+            # vencer, en ambos casos se alcanzó a consumir a tiempo.
+            aprovechados += 1
+            conteo_aprovechados[producto.nombre] += 1
             continue
 
         # Todavía tiene cantidad sin consumir y sin retirar.
         if lote.fecha_vencimiento <= hoy:
             desperdiciados += 1
+            conteo_desperdiciados[producto.nombre] += 1
         # Si está vigente, o próximo a vencer sin resolver todavía, no
         # se cuenta: su resultado aún no está definido.
 
-    return {"aprovechados": aprovechados, "desperdiciados": desperdiciados}
+    return {
+        "aprovechados": aprovechados,
+        "desperdiciados": desperdiciados,
+        "productos_aprovechados": [
+            {"producto_nombre": nombre, "cantidad": cantidad}
+            for nombre, cantidad in sorted(
+                conteo_aprovechados.items(), key=lambda par: par[1], reverse=True
+            )
+        ],
+        "productos_desperdiciados": [
+            {"producto_nombre": nombre, "cantidad": cantidad}
+            for nombre, cantidad in sorted(
+                conteo_desperdiciados.items(), key=lambda par: par[1], reverse=True
+            )
+        ],
+    }
+
 
 @router.get("/estadisticas/alertas-por-periodo", tags=["estadisticas"])
 async def alertas_por_periodo(
@@ -655,18 +778,28 @@ async def alertas_atencion_por_tipo(
     """
     Módulo Alertas y seguimiento. Por cada tipo de alerta, cuántas
     fueron atendidas contra cuántas siguen pendientes — mide qué tan al
-    día está el usuario con el seguimiento.
+    día está el usuario con el seguimiento. Incluye el detalle (producto
+    y fecha) de cada alerta que compone cada barra, para mostrarlo al
+    pasar el mouse sobre ella.
     """
-    alertas = conexion.exec(
-        select(alertadb).where(alertadb.usuario_id == usuario.id)
+    filas = conexion.exec(
+        select(alertadb, productodb)
+        .join(productodb, alertadb.producto_id == productodb.id, isouter=True)
+        .where(alertadb.usuario_id == usuario.id)
+        .order_by(alertadb.fecha_generada.desc())
     ).all()
 
     conteo = defaultdict(lambda: {"atendidas": 0, "pendientes": 0})
-    for a in alertas:
+    detalle = defaultdict(lambda: {"atendidas": [], "pendientes": []})
+    for a, producto in filas:
+        nombre = producto.nombre if producto else "Producto eliminado"
+        etiqueta = f"{nombre} · {a.fecha_generada.day} {MESES_ES[a.fecha_generada.month]}"
         if a.atendida:
             conteo[a.tipo]["atendidas"] += 1
+            detalle[a.tipo]["atendidas"].append(etiqueta)
         else:
             conteo[a.tipo]["pendientes"] += 1
+            detalle[a.tipo]["pendientes"].append(etiqueta)
 
     etiquetas_tipo = {
         "vencido": "Vencido",
@@ -681,6 +814,8 @@ async def alertas_atencion_por_tipo(
             "tipo_nombre": etiquetas_tipo[tipo],
             "atendidas": conteo[tipo]["atendidas"],
             "pendientes": conteo[tipo]["pendientes"],
+            "detalle_atendidas": detalle[tipo]["atendidas"],
+            "detalle_pendientes": detalle[tipo]["pendientes"],
         }
         for tipo in orden
         if conteo[tipo]["atendidas"] > 0 or conteo[tipo]["pendientes"] > 0
