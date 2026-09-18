@@ -116,12 +116,15 @@ async def listar_alertas(
     respuesta = []
     for alerta in alertas:
         producto = conexion.get(productodb, alerta.producto_id) if alerta.producto_id else None
+        categoria = conexion.get(categoriadb, producto.categoria_id) if producto else None
 
         item = {
             "id": alerta.id,
             "tipo": alerta.tipo,
             "producto_id": alerta.producto_id,
             "producto_nombre": producto.nombre if producto else None,
+            "categoria_color": categoria.color if categoria else None,
+            "categoria_icono": categoria.icono if categoria else None,
             "lote_id": alerta.lote_id,
             "fecha_generada": alerta.fecha_generada,
             "atendida": alerta.atendida,

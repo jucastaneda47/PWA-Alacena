@@ -47,6 +47,8 @@ async def consultar_inventario(
                 "producto_nombre": producto.nombre,
                 "categoria_id": producto.categoria_id,
                 "categoria_nombre": categoria.nombre,
+                "categoria_color": categoria.color,
+                "categoria_icono": categoria.icono,
                 "unidad_abreviatura": unidad.abreviatura,
                 "cantidad_inicial": lote.cantidad_inicial,
                 "cantidad_actual": lote.cantidad_actual,
