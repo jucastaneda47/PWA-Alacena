@@ -4,6 +4,7 @@ from modelos import (
     verificarpin,
     solicitarrecuperacion,
     restablecercontrasena,
+    actualizaravatar,
 )
 from db import sesiondb
 from fastapi import APIRouter,HTTPException, status, Depends
@@ -161,6 +162,20 @@ async def confirmacion(conexion: sesiondb, token: str=Depends(oauth2)):
 @router.get ("/autorizado", response_model=usuariodb, tags=["login"])
 async def vizualizar(usuario:usuariodb=Depends(confirmacion)):
      return usuario
+
+
+@router.put("/avatar", tags=["usuario"])
+async def guardar_avatar(
+    datos: actualizaravatar,
+    conexion: sesiondb,
+    usuario: usuariodb = Depends(confirmacion),
+):
+    """Guarda (o quita, si viene null) el avatar elegido por el usuario."""
+    usuario.avatar = datos.avatar
+    conexion.add(usuario)
+    conexion.commit()
+    conexion.refresh(usuario)
+    return {"avatar": usuario.avatar}
 
 
 @router.post("/recuperar-contrasena", tags=["usuario"])

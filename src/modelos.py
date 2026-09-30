@@ -55,6 +55,20 @@ class usuariodb(usuario,table=True):
     token_recuperacion: str | None = Field(default=None)
     token_recuperacion_expiracion: datetime | None = Field(default=None)
 
+    # --- Avatar elegido por el usuario (id del catálogo del frontend: a1..a12) ---
+    avatar: str | None = Field(default=None)
+
+class actualizaravatar(SQLModel):
+    avatar: str | None = None
+
+    @field_validator("avatar")
+    @classmethod
+    def validar_avatar(cls, avatar):
+        if avatar is not None and not re.fullmatch(r"a([1-9]|1[0-2])", avatar):
+            raise ValueError("Avatar no válido.")
+        return avatar
+
+
 class verificarpin(SQLModel):
     correo: EmailStr
     pin: str
