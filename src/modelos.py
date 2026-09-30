@@ -5,6 +5,30 @@ from datetime import datetime, date
 from sqlalchemy import CheckConstraint
 
 
+def validar_reglas_contraseña(contraseña: str) -> str:
+    """
+    Reglas de contraseña compartidas: se usan tanto al crear la cuenta
+    como al restablecerla desde "Olvidé mi contraseña", para que en los
+    dos casos se exija exactamente lo mismo.
+    """
+    if len(contraseña) < 8:
+        raise ValueError("La contraseña debe tener mínimo 8 caracteres.")
+
+    if not re.search(r"[A-Z]", contraseña):
+        raise ValueError("Debe contener al menos una letra mayúscula.")
+
+    if not re.search(r"[a-z]", contraseña):
+        raise ValueError("Debe contener al menos una letra minúscula.")
+
+    if not re.search(r"\d", contraseña):
+        raise ValueError("Debe contener al menos un número.")
+
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=/\\[\]]", contraseña):
+        raise ValueError("Debe contener al menos un carácter especial.")
+
+    return contraseña
+
+
 class usuario(SQLModel):
     name:str
     correo:EmailStr=Field(unique=True)
@@ -13,23 +37,7 @@ class usuario(SQLModel):
     @field_validator("contraseña")
     @classmethod
     def validar_contraseña(cls, contraseña: str):
-
-        if len(contraseña) < 8:
-            raise ValueError("La contraseña debe tener mínimo 8 caracteres.")
-
-        if not re.search(r"[A-Z]", contraseña):
-            raise ValueError("Debe contener al menos una letra mayúscula.")
-
-        if not re.search(r"[a-z]", contraseña):
-            raise ValueError("Debe contener al menos una letra minúscula.")
-
-        if not re.search(r"\d", contraseña):
-            raise ValueError("Debe contener al menos un número.")
-
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=/\\[\]]", contraseña):
-            raise ValueError("Debe contener al menos un carácter especial.")
-
-        return contraseña
+        return validar_reglas_contraseña(contraseña)
 
 class usuariocreate(usuario):
     ...
@@ -43,15 +51,34 @@ class usuariodb(usuario,table=True):
     promedio_desperdicio: float = Field(default=10.0)
     meta_desperdicio: float = Field(default=2.0)
 
+    # --- Recuperación de contraseña ("Olvidé mi contraseña") ---
+    token_recuperacion: str | None = Field(default=None)
+    token_recuperacion_expiracion: datetime | None = Field(default=None)
+
 class verificarpin(SQLModel):
     correo: EmailStr
     pin: str
+
+
+# --- Schemas para el flujo de "Olvidé mi contraseña" ---
+class solicitarrecuperacion(SQLModel):
+    correo: EmailStr
+
+
+class restablecercontrasena(SQLModel):
+    token: str
+    nueva_contraseña: str
+
+    @field_validator("nueva_contraseña")
+    @classmethod
+    def validar_nueva_contraseña(cls, contraseña: str):
+        return validar_reglas_contraseña(contraseña)
 
 class categoria(SQLModel):
     nombre: str
     stock_minimo: float = Field(default=0)
     icono: str = Field(default="package")
-    color: str = Field(default="slate") 
+    color: str = Field(default="slate")
 
 class categoriacreate(categoria):
     ...
