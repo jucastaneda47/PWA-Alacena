@@ -4,6 +4,7 @@ from db import sesiondb
 from modelos import lotecreate, lotedb, loteupdate, compradb, productodb, usuariodb
 from usuarios import confirmacion
 from clasificacion import calcular_estado
+from datetime import date
 
 router = APIRouter()
 
@@ -26,6 +27,12 @@ async def crear_lote(
     conexion: sesiondb, datos: lotecreate, usuario: usuariodb = Depends(confirmacion)
 ):
     _validar_referencias(conexion, usuario.id, datos.compra_id, datos.producto_id)
+
+    if datos.fecha_vencimiento < date.today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La fecha de vencimiento no puede ser anterior a hoy",
+        )
 
     nuevo = lotedb(
         producto_id=datos.producto_id,

@@ -3,6 +3,7 @@ from sqlmodel import select
 from db import sesiondb
 from modelos import transaccioncreate, transacciondb, lotedb, usuariodb
 from usuarios import confirmacion
+from clasificacion import calcular_estado
 
 router = APIRouter()
 
@@ -15,6 +16,13 @@ async def registrar_consumo(
     lote = conexion.get(lotedb, datos.lote_id)
     if lote is None or lote.usuario_id != usuario.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lote no encontrado")
+
+    # Un producto vencido no se consume: solo se puede retirar de la alacena.
+    if datos.tipo == "consumo" and calcular_estado(lote.fecha_vencimiento) == "vencido":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Producto vencido, retírelo de la alacena",
+        )
 
     if datos.cantidad <= 0:
         raise HTTPException(
