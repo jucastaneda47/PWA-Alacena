@@ -53,7 +53,7 @@ async def enviar_correo_recuperacion(destinatario: str, token: str) -> None:
     cuerpo = f"""
     <p>Hola,</p>
     <p>Recibimos una solicitud para restablecer tu contraseña de FreshLog.</p>
-    <p><a href="{link}">Ház clic acá para crear una nueva contraseña</a></p>
+    <p><a href="{link}">Haz clic aquí para crear una nueva contraseña</a></p>
     <p>Este enlace expira en {TOKEN_RECUPERACION_VALIDEZ_MINUTOS} minutos. Si no
     fuiste tu quien lo solicitó, puedes ignorar este mensaje: tu contraseña
     actual sigue funcionando igual.</p>

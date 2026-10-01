@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlmodel import select
 from db import sesiondb
-from modelos import lotecreate, lotedb, loteupdate, compradb, productodb, usuariodb
+from modelos import (
+    lotecreate, lotedb, loteupdate, compradb, productodb, usuariodb,
+    categoriadb, unidadmedidadb,
+)
 from usuarios import confirmacion
 from clasificacion import calcular_estado
 from datetime import date
@@ -19,6 +22,16 @@ def _validar_referencias(conexion, usuario_id: int, compra_id: int, producto_id:
     if producto is None or producto.usuario_id != usuario_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="El producto indicado no existe"
+        )
+    categoria = conexion.get(categoriadb, producto.categoria_id)
+    unidad = conexion.get(unidadmedidadb, producto.unidad_de_medida_id)
+    if categoria is None or categoria.eliminada or unidad is None or unidad.eliminada:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "La categoría o la unidad de medida de este producto fue eliminada. "
+                "Crea el producto de nuevo con una categoría y unidad vigentes."
+            ),
         )
 
 
@@ -68,11 +81,6 @@ async def obtener_lote(
 async def actualizar_lote(
     conexion: sesiondb, lote_id: int, datos: loteupdate, usuario: usuariodb = Depends(confirmacion)
 ):
-    """
-    RF-10: Actualiza la cantidad disponible de un lote (por ejemplo, para
-    corregir un error de captura) y/o su fecha de vencimiento. Si cambia la
-    fecha de vencimiento, el estado se recalcula automáticamente.
-    """
     lote = conexion.get(lotedb, lote_id)
     if lote is None or lote.usuario_id != usuario.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lote no encontrado")

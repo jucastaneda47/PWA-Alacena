@@ -39,6 +39,21 @@ class usuario(SQLModel):
     def validar_contraseña(cls, contraseña: str):
         return validar_reglas_contraseña(contraseña)
 
+    @field_validator("username")
+    @classmethod
+    def limpiar_username(cls, username: str):
+        # Se conserva como lo escribió la persona, solo sin espacios sobrantes
+        username = username.strip()
+        if not username:
+            raise ValueError("El nombre de usuario no puede estar vacío.")
+        return username
+
+    @field_validator("correo")
+    @classmethod
+    def correo_en_minusculas(cls, correo: str):
+        # El correo siempre se guarda en minúsculas
+        return correo.strip().lower()
+
 class usuariocreate(usuario):
     ...
 
@@ -73,10 +88,20 @@ class verificarpin(SQLModel):
     correo: EmailStr
     pin: str
 
+    @field_validator("correo")
+    @classmethod
+    def correo_en_minusculas(cls, correo: str):
+        return correo.strip().lower()
+
 
 # --- Schemas para el flujo de "Olvidé mi contraseña" ---
 class solicitarrecuperacion(SQLModel):
     correo: EmailStr
+
+    @field_validator("correo")
+    @classmethod
+    def correo_en_minusculas(cls, correo: str):
+        return correo.strip().lower()
 
 
 class restablecercontrasena(SQLModel):
@@ -106,6 +131,8 @@ class categoriaupdate(SQLModel):
 class categoriadb(categoria, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
+    # Eliminación lógica: la fila se conserva para no romper el historial
+    eliminada: bool = Field(default=False)
 
 
 class unidadmedida(SQLModel):
@@ -125,6 +152,8 @@ class unidadmedidaupdate(SQLModel):
 class unidadmedidadb(unidadmedida, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
+    # Eliminación lógica: la fila se conserva para no romper el historial
+    eliminada: bool = Field(default=False)
 
 
 class producto(SQLModel):

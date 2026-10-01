@@ -606,7 +606,7 @@ async def riesgo_por_categoria(conexion: sesiondb, usuario: usuariodb = Depends(
     """
     Módulo Consumo y vencimientos. Cuenta, por categoría, cuántos lotes
     CON STOCK ACTUAL están en este momento próximos a vencer — los que
-    ya vencieron no entran acá, esos se resuelven aparte con un retiro.
+    ya vencieron no entran aquí, esos se resuelven aparte con un retiro.
     El estado se recalcula al vuelo (no se confía en el campo `estado`
     guardado, que solo se actualiza cuando se consulta /inventario).
     Incluye, por categoría, el detalle de qué productos están próximos

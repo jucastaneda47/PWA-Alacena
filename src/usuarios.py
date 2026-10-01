@@ -7,10 +7,11 @@ from modelos import (
     actualizaravatar,
 )
 from db import sesiondb
+from minimos import sembrar_datos_para_usuario
 from fastapi import APIRouter,HTTPException, status, Depends
 from passlib.hash import argon2
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlmodel import select
+from sqlmodel import select, func
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 import secrets
@@ -30,6 +31,24 @@ oauth2= OAuth2PasswordBearer(tokenUrl="login")
 
 @router.post("/usuario", response_model=usuariodb, tags=["usuario"])
 async def crear(conexion: sesiondb, usuario: usuariocreate):
+    # El nombre de usuario no distingue mayúsculas (M19MOCHO == m19mocho)
+    ya_usuario = conexion.exec(
+        select(usuariodb).where(func.lower(usuariodb.username) == usuario.username.lower())
+    ).first()
+    if ya_usuario is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ese nombre de usuario ya está en uso",
+        )
+    ya_correo = conexion.exec(
+        select(usuariodb).where(func.lower(usuariodb.correo) == usuario.correo.lower())
+    ).first()
+    if ya_correo is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ese correo ya está registrado",
+        )
+
     nuevo_usuario = usuario.model_dump()
 
     nuevo_usuario["contraseña"] = argon2.hash(
@@ -48,6 +67,9 @@ async def crear(conexion: sesiondb, usuario: usuariocreate):
     conexion.commit()
     conexion.refresh(usadb)
 
+    # --- Categorías y unidades de medida predeterminadas (copia propia del usuario) ---
+    sembrar_datos_para_usuario(usadb.id)
+
     # --- Enviamos el correo con el PIN ---
     await enviar_pin_verificacion(usadb.correo, pin)
 
@@ -56,7 +78,7 @@ async def crear(conexion: sesiondb, usuario: usuariocreate):
 
 @router.post("/verificar-pin", tags=["usuario"])
 async def verificar_pin(conexion: sesiondb, datos: verificarpin):
-    buscar = select(usuariodb).where(usuariodb.correo == datos.correo)
+    buscar = select(usuariodb).where(func.lower(usuariodb.correo) == datos.correo.lower())
     user = conexion.exec(buscar).first()
 
     if user is None:
@@ -91,7 +113,8 @@ async def verificar_pin(conexion: sesiondb, datos: verificarpin):
 
 @router.post("/reenviar-pin", tags=["usuario"])
 async def reenviar_pin(conexion: sesiondb, correo: str):
-    buscar = select(usuariodb).where(usuariodb.correo == correo)
+    correo = correo.strip().lower()
+    buscar = select(usuariodb).where(func.lower(usuariodb.correo) == correo)
     user = conexion.exec(buscar).first()
 
     if user is None:
@@ -116,7 +139,10 @@ async def reenviar_pin(conexion: sesiondb, correo: str):
 
 @router.post("/login", tags=["login"])
 async def inicio(conexion: sesiondb, formulario: OAuth2PasswordRequestForm = Depends() ):
-    buscar= select(usuariodb).where(usuariodb.username==formulario.username)
+    # El usuario se compara sin distinguir mayúsculas
+    buscar= select(usuariodb).where(
+        func.lower(usuariodb.username)==formulario.username.strip().lower()
+    )
     user= conexion.exec(buscar).first()
     if user is None:
         raise HTTPException(
@@ -143,12 +169,15 @@ async def inicio(conexion: sesiondb, formulario: OAuth2PasswordRequestForm = Dep
         "access_token":jwt.encode(acces_token,algo2,algorithm=algo), "token_type":"bearer"
     }
 async def confirmacion(conexion: sesiondb, token: str=Depends(oauth2)):
-    userid= jwt.decode(token,algo2,algorithms=[algo]).get("sub")
-    iduser=int(userid)
-    if iduser is None:
+    # Token vencido o inválido -> 401 (el frontend cierra la sesión), no error 500
+    try:
+        userid= jwt.decode(token,algo2,algorithms=[algo]).get("sub")
+        iduser=int(userid)
+    except (JWTError, TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No estas verificado, Porfavor intentalo de nuevo"
+            detail="Sesión expirada, inicia sesión de nuevo",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     
     mostrar=conexion.get(usuariodb,iduser)
@@ -158,6 +187,18 @@ async def confirmacion(conexion: sesiondb, token: str=Depends(oauth2)):
                 detail="Credenciales invalidas"
             )
     return mostrar
+
+@router.post("/renovar-sesion", tags=["login"])
+async def renovar_sesion(usuario: usuariodb = Depends(confirmacion)):
+    """
+    Sesión por inactividad: mientras la persona siga activa, el frontend pide
+    un token nuevo con otros 10 minutos de vida. Si pasa 10 minutos sin
+    actividad nadie renueva el token y la sesión caduca.
+    """
+    tiempo = datetime.utcnow() + timedelta(minutes=t_estatico)
+    token = jwt.encode({"sub": str(usuario.id), "exp": tiempo}, algo2, algorithm=algo)
+    return {"access_token": token, "token_type": "bearer"}
+
 
 @router.get ("/autorizado", response_model=usuariodb, tags=["login"])
 async def vizualizar(usuario:usuariodb=Depends(confirmacion)):
@@ -184,7 +225,7 @@ async def recuperar_contrasena(conexion: sesiondb, datos: solicitarrecuperacion)
     Primera mitad de "Olvidé mi contraseña": genera un token de un solo uso
     y lo envía por correo con el enlace para restablecer la contraseña.
     """
-    buscar = select(usuariodb).where(usuariodb.correo == datos.correo)
+    buscar = select(usuariodb).where(func.lower(usuariodb.correo) == datos.correo.lower())
     user = conexion.exec(buscar).first()
 
     if user is None:
