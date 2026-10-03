@@ -750,7 +750,9 @@ async def alertas_por_periodo(
         periodo = "semana"
 
     alertas = conexion.exec(
-        select(alertadb).where(alertadb.usuario_id == usuario.id)
+        select(alertadb).where(
+            alertadb.usuario_id == usuario.id, alertadb.oculta == False  # noqa: E712
+        )
     ).all()
 
     conteo = defaultdict(lambda: defaultdict(int))
@@ -785,7 +787,7 @@ async def alertas_atencion_por_tipo(
     filas = conexion.exec(
         select(alertadb, productodb)
         .join(productodb, alertadb.producto_id == productodb.id, isouter=True)
-        .where(alertadb.usuario_id == usuario.id)
+        .where(alertadb.usuario_id == usuario.id, alertadb.oculta == False)  # noqa: E712
         .order_by(alertadb.fecha_generada.desc())
     ).all()
 
@@ -820,3 +822,51 @@ async def alertas_atencion_por_tipo(
         for tipo in orden
         if conteo[tipo]["atendidas"] > 0 or conteo[tipo]["pendientes"] > 0
     ]
+
+
+@router.get("/estadisticas/alertas-por-categoria", tags=["estadisticas"])
+async def alertas_por_categoria(
+    conexion: sesiondb, usuario: usuariodb = Depends(confirmacion)
+):
+    """
+    Módulo Alertas y seguimiento. Para cada tipo de alerta (vencido,
+    próximo a vencer y stock mínimo) cuántas alertas hay por categoría,
+    contando las pendientes y las atendidas. Incluye el detalle (producto,
+    fecha y si ya fue atendida) para mostrarlo al pasar el mouse.
+    """
+    filas = conexion.exec(
+        select(alertadb, productodb, categoriadb)
+        .join(productodb, alertadb.producto_id == productodb.id, isouter=True)
+        .join(categoriadb, productodb.categoria_id == categoriadb.id, isouter=True)
+        .where(alertadb.usuario_id == usuario.id, alertadb.oculta == False)  # noqa: E712
+        .order_by(alertadb.fecha_generada.desc())
+    ).all()
+
+    # tipo -> clave de categoría -> datos acumulados
+    acumulado = {t: {} for t in ("vencido", "proximo_a_vencer", "stock_minimo")}
+    for a, producto, categoria in filas:
+        if a.tipo not in acumulado:
+            continue
+        clave = categoria.id if categoria else 0
+        grupo = acumulado[a.tipo].setdefault(
+            clave,
+            {
+                "categoria_id": clave,
+                "categoria_nombre": categoria.nombre if categoria else "Sin categoría",
+                "color": categoria.color if categoria else None,
+                "icono": categoria.icono if categoria else None,
+                "cantidad": 0,
+                "productos": [],
+            },
+        )
+        nombre = producto.nombre if producto else "Producto eliminado"
+        linea = f"{nombre} · {a.fecha_generada.day} {MESES_ES[a.fecha_generada.month]}"
+        if a.atendida:
+            linea += " (atendida)"
+        grupo["cantidad"] += 1
+        grupo["productos"].append(linea)
+
+    return {
+        tipo: sorted(grupos.values(), key=lambda g: g["cantidad"], reverse=True)
+        for tipo, grupos in acumulado.items()
+    }

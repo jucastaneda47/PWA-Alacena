@@ -238,6 +238,8 @@ class alerta(SQLModel):
     lote_id: int | None = Field(default=None, foreign_key="lotedb.id")
     fecha_generada: datetime = Field(default_factory=datetime.utcnow)
     atendida: bool = Field(default=False)
+    oculta: bool = Field(default=False)
+    """ True cuando el usuario eliminó el registro del historial de seguimiento """
 
 
 class alertadb(alerta, table=True):
