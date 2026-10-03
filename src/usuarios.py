@@ -15,6 +15,7 @@ from sqlmodel import select, func
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 import secrets
+import os
 from correo import (
     generar_pin,
     enviar_pin_verificacion,
@@ -26,7 +27,13 @@ from correo import (
 router = APIRouter()
 t_estatico = 10
 algo= "HS256"
-algo2= "01268c1ebf7200ad045f6af05ff34ad91f9c4e8aabf5e814c827bc9e824e0d98"
+# Clave para firmar los tokens: viene del archivo .env (variable JWT_SECRET), nunca va escrita en el código.
+algo2 = os.getenv("JWT_SECRET")
+if not algo2:
+    raise RuntimeError(
+        "Falta JWT_SECRET en el archivo .env. Genera una con: "
+        "python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
 oauth2= OAuth2PasswordBearer(tokenUrl="login")
 
 @router.post("/usuario", response_model=usuariodb, tags=["usuario"])

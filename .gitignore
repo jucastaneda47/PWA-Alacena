@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secretos y datos locales: NUNCA se suben a GitHub
+.env
+.env.*
+!.env.example
+db.sqlite3
+*.sqlite3
+*.db
+
+# Pruebas
+.pytest_cache/
+.coverage
+htmlcov/
