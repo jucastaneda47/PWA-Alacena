@@ -73,6 +73,18 @@ class usuariodb(usuario,table=True):
     # --- Avatar elegido por el usuario (id del catálogo del frontend: a1..a12) ---
     avatar: str | None = Field(default=None)
 
+class usuariopublico(SQLModel):
+    """Datos del usuario que se pueden devolver por la API (sin contraseña, PIN ni tokens)."""
+    id: int
+    name: str
+    correo: str
+    username: str
+    avatar: str | None = None
+    esta_verificado: bool = False
+    promedio_desperdicio: float = 10.0
+    meta_desperdicio: float = 2.0
+
+
 class actualizaravatar(SQLModel):
     avatar: str | None = None
 

@@ -1,3 +1,4 @@
+import os
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI
@@ -17,9 +18,17 @@ app.include_router(consumo.router)
 app.include_router(alertas.router)
 app.include_router(estadisticas.router)
 
+# Orígenes permitidos (frontend). En producción se define CORS_ORIGINS en el entorno,
+# separando varias URL con comas. Ej.: https://alacena.vercel.app
+ORIGENES_PERMITIDOS = [
+    o.strip().rstrip("/")
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ORIGENES_PERMITIDOS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

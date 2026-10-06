@@ -157,6 +157,23 @@ def test_it30_autorizado_devuelve_el_usuario(ana):
     assert r.status_code == 200 and r.json()["username"] == "ana"
 
 
+CAMPOS_SECRETOS = {"contraseña", "pin_verificacion", "pin_expiracion",
+                   "token_recuperacion", "token_recuperacion_expiracion"}
+
+
+def test_it30b_autorizado_no_expone_datos_secretos(ana):
+    datos = ana.get("/autorizado").json()
+    assert CAMPOS_SECRETOS.isdisjoint(datos)
+    assert {"id", "name", "correo", "username", "avatar"} <= set(datos)
+
+
+def test_it30c_registro_no_expone_datos_secretos(cliente):
+    r = cliente.post("/usuario", json=cuerpo())
+    assert r.status_code == 200
+    assert CAMPOS_SECRETOS.isdisjoint(r.json())
+    assert r.json()["correo"] == "ana@correo.com"
+
+
 def test_it31_sin_token_es_401(cliente):
     assert cliente.get("/autorizado").status_code == 401
     assert cliente.get("/categorias").status_code == 401

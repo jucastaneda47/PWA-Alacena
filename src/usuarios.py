@@ -1,6 +1,7 @@
 from modelos import (
     usuariocreate,
     usuariodb,
+    usuariopublico,
     verificarpin,
     solicitarrecuperacion,
     restablecercontrasena,
@@ -36,7 +37,7 @@ if not algo2:
     )
 oauth2= OAuth2PasswordBearer(tokenUrl="login")
 
-@router.post("/usuario", response_model=usuariodb, tags=["usuario"])
+@router.post("/usuario", response_model=usuariopublico, tags=["usuario"])
 async def crear(conexion: sesiondb, usuario: usuariocreate):
     # El nombre de usuario no distingue mayúsculas (M19MOCHO == m19mocho)
     ya_usuario = conexion.exec(
@@ -207,7 +208,7 @@ async def renovar_sesion(usuario: usuariodb = Depends(confirmacion)):
     return {"access_token": token, "token_type": "bearer"}
 
 
-@router.get ("/autorizado", response_model=usuariodb, tags=["login"])
+@router.get ("/autorizado", response_model=usuariopublico, tags=["login"])
 async def vizualizar(usuario:usuariodb=Depends(confirmacion)):
      return usuario
 
