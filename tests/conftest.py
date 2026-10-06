@@ -15,6 +15,8 @@ from pathlib import Path
 os.environ.setdefault("EMAIL_SENDER", "pruebas.freshlog@gmail.com")
 os.environ.setdefault("EMAIL_APP_PASSWORD", "clave-de-prueba")
 os.environ.setdefault("JWT_SECRET", "clave-solo-para-pruebas-no-usar-en-produccion")
+# Las pruebas nunca deben usar la base de datos real, aunque el .env tenga DATABASE_URL.
+os.environ["DATABASE_URL"] = ""
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
@@ -28,11 +30,19 @@ from sqlmodel import Session, SQLModel, create_engine
 # módulos, porque minimos.py guarda una referencia a db.engine al importarse.
 import db
 
-motor_pruebas = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+# Por defecto: SQLite en memoria. Para comprobar que todo funciona también en PostgreSQL,
+# define PRUEBAS_DATABASE_URL con una base de datos VACÍA de pruebas (¡se borran sus tablas!).
+_url_pg = os.environ.get("PRUEBAS_DATABASE_URL", "").strip()
+if _url_pg:
+    if _url_pg.startswith("postgresql://"):
+        _url_pg = "postgresql+psycopg://" + _url_pg[len("postgresql://"):]
+    motor_pruebas = create_engine(_url_pg)
+else:
+    motor_pruebas = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 db.engine = motor_pruebas
 
 import main  # noqa: E402
