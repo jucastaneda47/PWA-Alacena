@@ -1,8 +1,9 @@
 import random
 import os
+import httpx
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 
-# --- Configuración de conexión (mover a variables de entorno / .env) ---
+# --- Envío por SMTP (Gmail). Se usa en tu computador, o donde el servidor permita SMTP ---
 conf = ConnectionConfig(
     MAIL_USERNAME=os.getenv("EMAIL_SENDER"),
     MAIL_PASSWORD=os.getenv("EMAIL_APP_PASSWORD"),
@@ -22,6 +23,46 @@ PIN_VALIDEZ_MINUTOS = 10
 TOKEN_RECUPERACION_VALIDEZ_MINUTOS = 30
 
 
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+async def _enviar(destinatario: str, asunto: str, cuerpo_html: str) -> None:
+    """
+    Envía un correo HTML.
+    - Si existe BREVO_API_KEY en el entorno, lo envía por la API de Brevo (HTTPS). Es lo que
+      se usa en producción, porque los servidores gratuitos suelen bloquear el SMTP.
+    - Si no existe, lo envía por SMTP con Gmail, como siempre.
+    """
+    api_key = os.getenv("BREVO_API_KEY")
+    if api_key:
+        remitente = os.getenv("BREVO_SENDER") or os.getenv("EMAIL_SENDER")
+        if not remitente:
+            raise RuntimeError("Falta BREVO_SENDER (o EMAIL_SENDER) para enviar correos por Brevo.")
+        datos = {
+            "sender": {"name": "FreshLog", "email": remitente},
+            "to": [{"email": destinatario}],
+            "subject": asunto,
+            "htmlContent": cuerpo_html,
+        }
+        async with httpx.AsyncClient(timeout=20) as cliente:
+            resp = await cliente.post(
+                BREVO_URL,
+                json=datos,
+                headers={"api-key": api_key, "accept": "application/json"},
+            )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Brevo rechazó el correo ({resp.status_code}): {resp.text[:200]}")
+        return
+
+    mensaje = MessageSchema(
+        subject=asunto,
+        recipients=[destinatario],
+        body=cuerpo_html,
+        subtype=MessageType.html,
+    )
+    await FastMail(conf).send_message(mensaje)
+
+
 def generar_pin() -> str:
     """Genera un PIN numérico de 6 dígitos."""
     return str(random.randint(100000, 999999))
@@ -36,17 +77,7 @@ async def enviar_pin_verificacion(destinatario: str, pin: str) -> None:
     quien intentó registrarse, puedes ignorar este mensaje.</p>
     """
 
-    mensaje = MessageSchema(
-        subject="Verifica tu cuenta",
-        recipients=[destinatario],
-        body=cuerpo,
-        subtype=MessageType.html,
-    )
-
-    fm = FastMail(conf)
-    await fm.send_message(mensaje)
-
-
+    await _enviar(destinatario, "Verifica tu cuenta", cuerpo)
 async def enviar_correo_recuperacion(destinatario: str, token: str) -> None:
     """Envía el correo de 'Olvidé mi contraseña' con el enlace para restablecerla."""
     link = f"{FRONTEND_URL}/restablecer-contrasena?token={token}"
@@ -59,12 +90,4 @@ async def enviar_correo_recuperacion(destinatario: str, token: str) -> None:
     actual sigue funcionando igual.</p>
     """
 
-    mensaje = MessageSchema(
-        subject="Restablecer tu contraseña",
-        recipients=[destinatario],
-        body=cuerpo,
-        subtype=MessageType.html,
-    )
-
-    fm = FastMail(conf)
-    await fm.send_message(mensaje)
+    await _enviar(destinatario, "Restablecer tu contraseña", cuerpo)

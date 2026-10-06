@@ -9,6 +9,7 @@ dependencies = [
     "email-validator>=2.3.0",
     "fastapi-mail>=1.6.5",
     "fastapi[standard]>=0.139.0",
+    "httpx>=0.28",
     "passlib>=1.7.4",
     "python-dotenv>=1.2.2",
     "psycopg[binary]>=3.2",
