@@ -44,11 +44,25 @@ def _buscar_activo_por_nombre(conexion, usuario_id: int, nombre: str, excluir_id
     return None
 
 
-@router.post("/productos", response_model=productodb, tags=["productos"])
-async def crear_producto(
-    conexion: sesiondb, datos: productocreate, usuario: usuariodb = Depends(confirmacion)
-):
-    _validar_referencias(conexion, usuario.id, datos.categoria_id, datos.unidad_de_medida_id)
+def crear_o_reutilizar_producto(
+    conexion, usuario_id: int, datos: productocreate, confirmar: bool = True
+) -> productodb:
+    """
+    Crea el producto, o devuelve el que ya existe con ese nombre (reutilizándolo).
+    - Reactiva un producto "huérfano" (su categoría o unidad fue eliminada) con la nueva categoría y unidad.
+    - Si el nombre ya existe con otra categoría o unidad, responde 400.
+    Con confirmar=False no hace commit (solo flush), para poder cancelar todo si algo falla después.
+    """
+    _validar_referencias(conexion, usuario_id, datos.categoria_id, datos.unidad_de_medida_id)
+
+    def guardar(fila):
+        conexion.add(fila)
+        if confirmar:
+            conexion.commit()
+            conexion.refresh(fila)
+        else:
+            conexion.flush()
+        return fila
 
     clave = datos.nombre.strip().casefold()
     candidatos = conexion.exec(
@@ -56,7 +70,7 @@ async def crear_producto(
         .join(categoriadb, productodb.categoria_id == categoriadb.id)
         .join(unidadmedidadb, productodb.unidad_de_medida_id == unidadmedidadb.id)
         .where(
-            productodb.usuario_id == usuario.id,
+            productodb.usuario_id == usuario_id,
             (categoriadb.eliminada == True) | (unidadmedidadb.eliminada == True),  # noqa: E712
         )
     ).all()
@@ -66,12 +80,9 @@ async def crear_producto(
         huerfano.unidad_de_medida_id = datos.unidad_de_medida_id
         if datos.stock_minimo is not None:
             huerfano.stock_minimo = datos.stock_minimo
-        conexion.add(huerfano)
-        conexion.commit()
-        conexion.refresh(huerfano)
-        return huerfano
+        return guardar(huerfano)
 
-    existente = _buscar_activo_por_nombre(conexion, usuario.id, datos.nombre)
+    existente = _buscar_activo_por_nombre(conexion, usuario_id, datos.nombre)
     if existente is not None:
         if (
             existente.categoria_id == datos.categoria_id
@@ -87,11 +98,14 @@ async def crear_producto(
         )
 
     datos.nombre = datos.nombre.strip()
-    nuevo = productodb(**datos.model_dump(), usuario_id=usuario.id)
-    conexion.add(nuevo)
-    conexion.commit()
-    conexion.refresh(nuevo)
-    return nuevo
+    return guardar(productodb(**datos.model_dump(), usuario_id=usuario_id))
+
+
+@router.post("/productos", response_model=productodb, tags=["productos"])
+async def crear_producto(
+    conexion: sesiondb, datos: productocreate, usuario: usuariodb = Depends(confirmacion)
+):
+    return crear_o_reutilizar_producto(conexion, usuario.id, datos)
 
 
 @router.get("/productos", response_model=list[productodb], tags=["productos"])

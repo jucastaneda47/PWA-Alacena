@@ -6,6 +6,8 @@ import correo
 
 def capturar(monkeypatch):
     enviados = []
+    # Aunque el .env local tenga BREVO_API_KEY, estas pruebas deben usar el camino SMTP simulado.
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
 
     async def falso(self, mensaje):
         enviados.append(mensaje)

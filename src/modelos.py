@@ -2,7 +2,7 @@ from sqlmodel import SQLModel,Field
 from pydantic import EmailStr, field_validator
 import re
 from datetime import datetime, date
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint, UniqueConstraint
 
 
 def validar_reglas_contraseña(contraseña: str) -> str:
@@ -204,6 +204,33 @@ class compracreate(compra):
 class compradb(compra, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
+
+
+class lineacompra(SQLModel):
+    """Una línea de una compra hecha sin conexión: un producto existente o uno nuevo."""
+    producto_id: int | None = None
+    nombre_nuevo: str | None = None
+    categoria_id: int | None = None
+    unidad_de_medida_id: int | None = None
+    fecha_vencimiento: date
+    cantidad_inicial: float
+
+
+class compraSincronizada(SQLModel):
+    """Compra completa (con sus lotes) que la app guardó sin conexión y ahora envía."""
+    cliente_id: str = Field(min_length=8, max_length=64)
+    fecha_compra: date
+    lineas: list[lineacompra] = Field(min_length=1, max_length=100)
+
+
+class sincronizaciondb(SQLModel, table=True):
+    """Registro de compras ya sincronizadas: evita crear la misma compra dos veces."""
+    __table_args__ = (UniqueConstraint("usuario_id", "cliente_id", name="uq_sincronizacion_usuario_cliente"),)
+    id: int | None = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuariodb.id")
+    cliente_id: str
+    compra_id: int
+    """Sin llave foránea a propósito: si luego se borra la compra, el registro de sincronización se conserva."""
 
 
 class lotebase(SQLModel):
