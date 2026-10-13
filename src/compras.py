@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -11,6 +12,19 @@ from clasificacion import calcular_estado
 from productos import crear_o_reutilizar_producto
 
 router = APIRouter()
+
+
+def _momento_de_registro(registrada_en: datetime | None) -> datetime:
+    """
+    Hora (UTC, sin zona) en que se registró la compra. Si la app la guardó sin conexión, trae la hora
+    real del registro; si falta o está en el futuro (reloj del dispositivo mal puesto), se usa la actual.
+    """
+    ahora = datetime.utcnow()
+    if registrada_en is None:
+        return ahora
+    if registrada_en.tzinfo is not None:
+        registrada_en = registrada_en.astimezone(timezone.utc).replace(tzinfo=None)
+    return min(registrada_en, ahora)
 
 
 @router.post("/compras", response_model=compradb, tags=["compras"])
@@ -52,7 +66,11 @@ async def sincronizar_compra(
         return {"compra_id": previa.compra_id, "repetida": True}
 
     try:
-        compra = compradb(fecha_compra=datos.fecha_compra, usuario_id=usuario.id)
+        compra = compradb(
+            fecha_compra=datos.fecha_compra,
+            usuario_id=usuario.id,
+            fecha_registro=_momento_de_registro(datos.registrada_en),
+        )
         conexion.add(compra)
         conexion.flush()
 

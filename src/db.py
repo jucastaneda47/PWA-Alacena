@@ -1,4 +1,5 @@
 import os
+from sqlalchemy import inspect, text
 from sqlmodel import Session, create_engine, SQLModel
 from typing import Annotated
 from fastapi import FastAPI, Depends
@@ -40,7 +41,31 @@ sesiondb=Annotated[Session,Depends(chat)]
 
 from contextlib import asynccontextmanager
 
+
+# Columnas agregadas después de crear las tablas. create_all() no modifica tablas que ya existen,
+# así que aquí se añaden solas si faltan (SQLite y PostgreSQL). (tabla, columna, tipo SQL)
+COLUMNAS_NUEVAS = [
+    ("compradb", "fecha_registro", "TIMESTAMP"),
+]
+
+
+def asegurar_columnas(motor=None):
+    motor = motor or engine
+    for tabla, columna, tipo in COLUMNAS_NUEVAS:
+        existentes = {c["name"] for c in inspect(motor).get_columns(tabla)}
+        if columna in existentes:
+            continue
+        try:
+            with motor.begin() as conexion:
+                conexion.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"))
+        except Exception:
+            # Otra instancia del servidor pudo agregarla al mismo tiempo: si ya existe, todo bien.
+            if columna not in {c["name"] for c in inspect(motor).get_columns(tabla)}:
+                raise
+
+
 @asynccontextmanager
 async def crear_tablas(app: FastAPI):
     SQLModel.metadata.create_all(engine)
+    asegurar_columnas()
     yield

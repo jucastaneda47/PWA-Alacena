@@ -204,6 +204,8 @@ class compracreate(compra):
 class compradb(compra, table=True):
     id: int | None = Field(default=None, primary_key=True)
     usuario_id: int = Field(foreign_key="usuariodb.id")
+    # Momento exacto (UTC) en que se registró la compra. Las compras anteriores a este campo quedan en None.
+    fecha_registro: datetime | None = Field(default_factory=datetime.utcnow)
 
 
 class lineacompra(SQLModel):
@@ -221,6 +223,8 @@ class compraSincronizada(SQLModel):
     cliente_id: str = Field(min_length=8, max_length=64)
     fecha_compra: date
     lineas: list[lineacompra] = Field(min_length=1, max_length=100)
+    # Momento en que el usuario registró la compra en su dispositivo (útil si estaba sin conexión)
+    registrada_en: datetime | None = None
 
 
 class sincronizaciondb(SQLModel, table=True):

@@ -119,3 +119,84 @@ def test_it209_no_se_puede_usar_producto_ajeno(ana, beto):
 
 def test_it210_requiere_sesion(cliente, ana):
     assert cliente.post("/compras/sincronizar", json=cuerpo(ana)).status_code == 401
+
+
+# ---------- Hora real de la compra en el historial ----------
+from datetime import datetime, timedelta as _td
+
+
+def _evento_compra(ana):
+    eventos = ana.get("/estadisticas/historial?tipos=compra").json()["eventos"]
+    return [e for e in eventos if e["tipo"] == "compra"][0]
+
+
+def test_it211_la_compra_guarda_la_hora_real_del_registro(ana, sesion_bd):
+    antes = datetime.utcnow()
+    ana.post("/compras/sincronizar", json=cuerpo(ana))
+    compra = sesion_bd.exec(select(compradb)).one()
+    assert compra.fecha_registro is not None
+    assert antes - _td(seconds=2) <= compra.fecha_registro <= datetime.utcnow() + _td(seconds=2)
+    assert _evento_compra(ana)["fecha"].endswith("Z")  # hora UTC: el navegador la pasa a hora local
+
+
+def test_it212_compra_sin_conexion_conserva_la_hora_en_que_se_registro(ana, sesion_bd):
+    hace_dos_horas = datetime.utcnow() - _td(hours=2)
+    c = cuerpo(ana)
+    c["registrada_en"] = hace_dos_horas.isoformat() + "Z"
+    ana.post("/compras/sincronizar", json=c)
+    compra = sesion_bd.exec(select(compradb)).one()
+    assert abs((compra.fecha_registro - hace_dos_horas).total_seconds()) < 1
+
+
+def test_it213_hora_en_el_futuro_se_limita_a_la_actual(ana, sesion_bd):
+    c = cuerpo(ana)
+    c["registrada_en"] = (datetime.utcnow() + _td(days=3)).isoformat() + "Z"
+    ana.post("/compras/sincronizar", json=c)
+    compra = sesion_bd.exec(select(compradb)).one()
+    assert compra.fecha_registro <= datetime.utcnow() + _td(seconds=2)
+
+
+def test_it214_compra_antigua_sin_hora_sigue_mostrandose_a_las_9(ana, sesion_bd):
+    ana.post("/compras/sincronizar", json=cuerpo(ana))
+    compra = sesion_bd.exec(select(compradb)).one()
+    compra.fecha_registro = None  # como las compras creadas antes de existir este campo
+    sesion_bd.add(compra)
+    sesion_bd.commit()
+    e = _evento_compra(ana)
+    assert e["fecha"] == f"{compra.fecha_compra.isoformat()}T09:00:00"
+
+
+def test_it215_la_compra_clasica_tambien_guarda_la_hora(ana, sesion_bd):
+    ana.post("/compras", json={})
+    assert sesion_bd.exec(select(compradb)).one().fecha_registro is not None
+
+
+def test_it216_se_agrega_la_columna_en_bases_ya_creadas():
+    """Una base creada antes de existir fecha_registro la recibe sola al arrancar."""
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.pool import StaticPool
+    import db
+
+    motor = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    with motor.begin() as c:
+        c.execute(text("CREATE TABLE compradb (id INTEGER PRIMARY KEY, usuario_id INTEGER, fecha_compra DATE)"))
+        c.execute(text("INSERT INTO compradb (usuario_id, fecha_compra) VALUES (1, '2026-10-08')"))
+    db.asegurar_columnas(motor)
+    db.asegurar_columnas(motor)  # repetirlo no debe fallar
+    assert "fecha_registro" in {col["name"] for col in inspect(motor).get_columns("compradb")}
+    with motor.begin() as c:
+        assert c.execute(text("SELECT fecha_registro FROM compradb")).scalar() is None
+
+
+def test_it217_el_vencimiento_se_registra_a_las_00_horas(ana):
+    """Un lote vence apenas empieza su día de vencimiento: 00:00, no las 9."""
+    lineas = [{
+        "nombre_nuevo": "Yogur", "categoria_id": ana.categoria_id("Lácteos"),
+        "unidad_de_medida_id": ana.unidad_id("Litro"),
+        "fecha_vencimiento": str(date.today()), "cantidad_inicial": 2,
+    }]
+    ana.post("/compras/sincronizar", json=cuerpo(ana, lineas=lineas))
+    eventos = ana.get("/estadisticas/historial?tipos=vencimiento").json()["eventos"]
+    venc = [e for e in eventos if e["tipo"] == "vencimiento"]
+    assert len(venc) == 1
+    assert venc[0]["fecha"] == f"{date.today().isoformat()}T00:00:00"

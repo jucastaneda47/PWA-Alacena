@@ -284,7 +284,9 @@ async def historial_movimientos(
                 {
                     "id": f"compra-{lote.id}",
                     "tipo": "compra",
-                    "fecha": datetime.combine(compra.fecha_compra, time(9, 0)),
+                    # Hora real del registro (UTC) si existe; las compras antiguas solo tienen el día
+                    "fecha": compra.fecha_registro or datetime.combine(compra.fecha_compra, time(9, 0)),
+                    "utc": compra.fecha_registro is not None,
                     "titulo": f"Compraste {producto.nombre}",
                     "detalle": f"{lote.cantidad_inicial} {unidad.abreviatura} · vence {lote.fecha_vencimiento.isoformat()}",
                 }
@@ -307,6 +309,7 @@ async def historial_movimientos(
                     "id": f"{t.tipo}-{t.id}",
                     "tipo": t.tipo,
                     "fecha": t.fecha,
+                    "utc": True,
                     "titulo": f"{verbo} {producto.nombre}",
                     "detalle": f"{t.cantidad} {unidad.abreviatura}",
                 }
@@ -321,7 +324,8 @@ async def historial_movimientos(
                     {
                         "id": f"vencimiento-{lote.id}",
                         "tipo": "vencimiento",
-                        "fecha": datetime.combine(lote.fecha_vencimiento, time(9, 0)),
+                        # Un lote vence en cuanto empieza su día de vencimiento: 00:00 (hora local)
+                        "fecha": datetime.combine(lote.fecha_vencimiento, time(0, 0)),
                         "titulo": f"Venció {producto.nombre}",
                         "detalle": (
                             f"Quedaban {lote.cantidad_actual} {unidad.abreviatura} sin consumir"
@@ -339,7 +343,14 @@ async def historial_movimientos(
     eventos.sort(key=lambda e: e["fecha"], reverse=True)
 
     return {
-        "eventos": [{**e, "fecha": e["fecha"].isoformat()} for e in eventos],
+        # Las horas en UTC llevan "Z" para que el navegador las muestre en la hora local de la persona
+        "eventos": [
+            {
+                **{k: v for k, v in e.items() if k != "utc"},
+                "fecha": e["fecha"].isoformat() + ("Z" if e.get("utc") else ""),
+            }
+            for e in eventos
+        ],
         "total": len(eventos),
     }
 
