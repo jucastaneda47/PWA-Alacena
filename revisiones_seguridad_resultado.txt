@@ -1,0 +1,40 @@
+REVISIONES DE SEGURIDAD - FreshLog (backend)
+Fecha: 2026-10-19 15:43:01   Python 3.14.4   Base de datos: SQLite en memoria
+--------------------------------------------------------------------------------------------------------------------------
+Código Resultado   Prueba                                             Obtenido                                            
+--------------------------------------------------------------------------------------------------------------------------
+SG-01  Aprobada    GET sin token en 13 rutas protegidas               401                                                 
+SG-02  Aprobada    Escrituras (POST/PUT/DELETE) sin token             401, 401, 401, 401, 401, 401                        
+SG-03  Aprobada    Token firmado con otra clave                       401                                                 
+SG-04  Aprobada    Token expirado (firma válida)                      401 Sesión expirada, inicia sesión de nuevo         
+SG-05  Aprobada    Token con algoritmo 'none'                         401                                                 
+SG-06  Aprobada    Token con el 'sub' cambiado a mano (firma origina… 401                                                 
+SG-07  Aprobada    Contraseñas guardadas en la base de datos          3 registros, todos inician con $argon2: True        
+SG-08  Aprobada    Respuesta de /autorizado                           8 campos, ninguno sensible                          
+SG-09  Aprobada    Login con usuario inexistente vs. clave errónea    401/401: 'Usuario o contraseña incorrectos'         
+SG-10  Aprobada    Login de cuenta sin verificar                      403                                                 
+SG-11  Aprobada    Inyección SQL en el formulario de login (4 cargas) códigos [401, 401, 401, 401]; usuarios en tabla: 3  
+SG-12  Aprobada    Inyección SQL en nombre de categoría y filtro de … POST categorías [200, 200, 200]; lotes=2; categoría…
+SG-13  Aprobada    Usuario B pide un lote de A (GET /lotes/{id})      404                                                 
+SG-14  Aprobada    Usuario B pide una compra de A                     404                                                 
+SG-15  Aprobada    Usuario B pide un producto de A                    404                                                 
+SG-16  Aprobada    Usuario B pide una categoría de A                  404                                                 
+SG-17  Aprobada    Usuario B consume un lote de A                     404                                                 
+SG-18  Aprobada    Usuario B elimina una compra de A                  404                                                 
+SG-19  Aprobada    Usuario B edita una categoría de A                 404                                                 
+SG-20  Aprobada    Usuario B sincroniza una compra con un producto d… 400 Producto 1 de la compra: el producto ya no exis…
+SG-21  Aprobada    Listados de B no contienen datos de A              B ve lotes=1, productos=1, compras=1                
+SG-22  Aprobada    Inventario de B                                    1 lotes                                             
+SG-23  Aprobada    Registro con 5 contraseñas que incumplen las regl… 422, 422, 422, 422, 422                             
+SG-24  Aprobada    Registro con correo ya existente                   400 Ese correo ya está registrado                   
+SG-25  Aprobada    Registro con usuario existente en otras mayúsculas 400                                                 
+SG-26  Aprobada    PIN incorrecto                                     400 PIN incorrecto                                  
+SG-27  Aprobada    Restablecer con token inventado                    400                                                 
+SG-28  Aprobada    Avatar con valor fuera del catálogo (XSS)          422                                                 
+SG-29  Aprobada    CORS: petición desde origen no autorizado          400; allow-origin=None                              
+SG-30  Aprobada    CORS: petición desde origen autorizado             allow-origin=http://localhost:5173                  
+SG-31  Aprobada    Renovación de sesión con token vigente             200                                                 
+SG-32  Observación 15 intentos seguidos de login con clave errónea    [401]: no hay bloqueo por intentos                  
+SG-33  Observación Recuperación con correo no registrado              404 Usuario no encontrado: revela que el correo no …
+--------------------------------------------------------------------------------------------------------------------------
+Total: 33 revisiones | Aprobadas: 31 | Observaciones: 2 | Fallidas: 0
